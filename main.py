@@ -280,7 +280,9 @@ def run_full_analysis(
         if set(filtered_codes) != set(effective_codes):
             skipped = set(effective_codes) - set(filtered_codes)
             logger.info("今日休市股票已跳过: %s", skipped)
-        stock_codes = filtered_codes
+        # stock_codes = filtered_codes
+        stock_codes = effective_codes
+        logger.info("股票有: %s", stock_codes)
 
         # 命令行参数 --single-notify 覆盖配置（#55）
         if getattr(args, 'single_notify', False):
