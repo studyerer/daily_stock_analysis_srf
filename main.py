@@ -272,11 +272,11 @@ def run_full_analysis(
         filtered_codes, effective_region, should_skip = _compute_trading_day_filter(
             config, args, effective_codes
         )
-        if should_skip:
-            logger.info(
-                "今日所有相关市场均为非交易日，跳过执行。可使用 --force-run 强制执行。"
-            )
-            return
+        # if should_skip:
+        #     logger.info(
+        #         "今日所有相关市场均为非交易日，跳过执行。可使用 --force-run 强制执行。"
+        #     )
+        #     return
         if set(filtered_codes) != set(effective_codes):
             skipped = set(effective_codes) - set(filtered_codes)
             logger.info("今日休市股票已跳过: %s", skipped)
