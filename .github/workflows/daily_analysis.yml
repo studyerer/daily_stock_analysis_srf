@@ -1,10 +1,9 @@
 name: 每日股票分析
 
 on:
-  # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
   schedule:
-    - cron: '14 02 * * 1-5'     # 周一到周五，UTC 10:00 = 北京时间 18:00
-  
+    - cron: '14 02 * * 1-5'    # UTC 02:14 = 北京 10:14（盘中分析）
+
   # 手动触发
   workflow_dispatch:
     inputs:
@@ -14,9 +13,10 @@ on:
         default: 'full'
         type: choice
         options:
-          - full          # 完整分析（股票+大盘）
+          - full          # 完整分析（扫描+股票+大盘）
           - market-only   # 仅大盘复盘
-          - stocks-only   # 仅股票分析
+          - stocks-only   # 仅股票分析（含扫描）
+          - scan          # 仅全市场扫描（量化预筛选，不触发 AI 分析）
 
 # 并发控制：同一时间只运行一个分析任务
 concurrency:
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     # 添加超时限制，防止任务卡死
     timeout-minutes: 260
-    
+
     steps:
       - name: 随机延迟（避免固定时间访问）
         run: sleep $((RANDOM % 60))  # 随机延迟0-60秒启动
@@ -205,8 +205,10 @@ jobs:
           echo "=========================================="
           echo ""
           
-          # 执行分析
-          if [ "$MODE" = "market-only" ]; then
+          # 执行分析（full 和 stocks-only 模式自动先跑全市场扫描再分析）
+          if [ "$MODE" = "scan" ]; then
+            python main.py --scan
+          elif [ "$MODE" = "market-only" ]; then
             python main.py --market-review
           elif [ "$MODE" = "stocks-only" ]; then
             python main.py --no-market-review

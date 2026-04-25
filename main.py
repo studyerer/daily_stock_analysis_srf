@@ -184,6 +184,20 @@ def parse_arguments() -> argparse.Namespace:
         help='不保存分析上下文快照'
     )
 
+    # === 全市场扫描 ===
+    parser.add_argument(
+        '--scan',
+        action='store_true',
+        help='全市场扫描模式：量化预筛选沪深主板股票，输出候选股到 data/scan_candidates.json'
+    )
+
+    parser.add_argument(
+        '--scan-top-n',
+        type=int,
+        default=30,
+        help='扫描模式输出候选股数量（默认 30）'
+    )
+
     # === Backtest ===
     parser.add_argument(
         '--backtest',
@@ -282,6 +296,24 @@ def run_full_analysis(
             logger.info("今日休市股票已跳过: %s", skipped)
         # stock_codes = filtered_codes
         stock_codes = effective_codes
+
+        # 全市场扫描 → 候选股与白名单合并
+        try:
+            from src.core.market_scanner import scan_market
+            top_n = getattr(args, 'scan_top_n', 30) or 30
+            logger.info("===== 全市场扫描开始 =====")
+            scan_codes = scan_market(top_n=top_n)
+            if scan_codes:
+                whitelist_count = len(stock_codes)
+                merged = list(dict.fromkeys(stock_codes + scan_codes))  # 去重保序
+                logger.info(
+                    f"合并白名单({whitelist_count}只) + 扫描候选({len(scan_codes)}只) "
+                    f"= {len(merged)}只 (去重后)"
+                )
+                stock_codes = merged
+        except Exception as e:
+            logger.warning(f"全市场扫描失败，仅使用白名单: {e}")
+
         logger.info("股票有: %s", stock_codes)
 
         # 命令行参数 --single-notify 覆盖配置（#55）
@@ -588,6 +620,16 @@ def main() -> int:
                 f"回测完成: processed={stats.get('processed')} saved={stats.get('saved')} "
                 f"completed={stats.get('completed')} insufficient={stats.get('insufficient')} errors={stats.get('errors')}"
             )
+            return 0
+
+        # 模式: 仅全市场扫描（不触发 AI 分析，调试/手动用）
+        if getattr(args, 'scan', False):
+            logger.info("模式: 仅全市场扫描")
+            from src.core.market_scanner import scan_market
+
+            top_n = getattr(args, 'scan_top_n', 30) or 30
+            candidates = scan_market(top_n=top_n)
+            logger.info(f"扫描完成，共 {len(candidates)} 只候选股（仅扫描模式，不进行 AI 分析）")
             return 0
 
         # 模式1: 仅大盘复盘
