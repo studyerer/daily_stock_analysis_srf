@@ -8,6 +8,7 @@ into a unified interface consumed by the AgentExecutor.
 
 import json
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -16,6 +17,10 @@ from typing import Any, Dict, List, Optional
 from src.config import get_config
 
 logger = logging.getLogger(__name__)
+
+# 全局信号量：限制同时进行的 LLM 请求数，防止并发 Agent 同时轰击 API 触发 429
+# 值为 1 表示同一时刻只有 1 个 LLM 请求在飞行，其余排队等待
+_LLM_CONCURRENCY_SEMAPHORE = threading.Semaphore(1)
 
 
 # ============================================================
@@ -184,6 +189,16 @@ class LLMToolAdapter:
     # Unified call
     # ============================================================
 
+    # 429 限流重试配置
+    _RATE_LIMIT_MAX_RETRIES = 5
+    _RATE_LIMIT_BASE_DELAY = 3.0   # 首次重试等待秒数，后续指数递增
+
+    @staticmethod
+    def _is_rate_limit_error(error: Exception) -> bool:
+        """判断是否为 429 限流错误。"""
+        err_str = str(error)
+        return "429" in err_str or "rate" in err_str.lower() or "速率限制" in err_str
+
     def call_with_tools(
         self,
         messages: List[Dict[str, Any]],
@@ -191,6 +206,8 @@ class LLMToolAdapter:
         provider: Optional[str] = None,
     ) -> LLMResponse:
         """Send messages + tool declarations to LLM, return normalized response.
+
+        Includes automatic retry with exponential backoff for 429 rate-limit errors.
 
         Args:
             messages: Conversation messages in a provider-neutral format:
@@ -206,17 +223,31 @@ class LLMToolAdapter:
 
         last_error = None
         for p in providers_to_try:
-            try:
-                if p == "gemini" and self._gemini_available:
-                    return self._call_gemini(messages, tool_declarations.get("gemini", []))
-                elif p == "anthropic" and self._anthropic_available:
-                    return self._call_anthropic(messages, tool_declarations.get("anthropic", []))
-                elif p == "openai" and self._openai_available:
-                    return self._call_openai(messages, tool_declarations.get("openai", []))
-            except Exception as e:
-                logger.warning(f"Agent LLM call failed with {p}: {e}")
-                last_error = e
-                continue
+            for attempt in range(self._RATE_LIMIT_MAX_RETRIES + 1):
+                try:
+                    # 全局信号量：多个并发 Agent 排队等待，避免同时请求触发 429
+                    with _LLM_CONCURRENCY_SEMAPHORE:
+                        if p == "gemini" and self._gemini_available:
+                            return self._call_gemini(messages, tool_declarations.get("gemini", []))
+                        elif p == "anthropic" and self._anthropic_available:
+                            return self._call_anthropic(messages, tool_declarations.get("anthropic", []))
+                        elif p == "openai" and self._openai_available:
+                            return self._call_openai(messages, tool_declarations.get("openai", []))
+                        else:
+                            break  # provider not available, try next
+                except Exception as e:
+                    last_error = e
+                    if self._is_rate_limit_error(e) and attempt < self._RATE_LIMIT_MAX_RETRIES:
+                        delay = self._RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            f"[{p}] 429 限流，第 {attempt + 1}/{self._RATE_LIMIT_MAX_RETRIES} 次重试，"
+                            f"等待 {delay:.0f}s..."
+                        )
+                        time.sleep(delay)
+                        continue
+                    else:
+                        logger.warning(f"Agent LLM call failed with {p}: {e}")
+                        break  # non-429 error or retries exhausted, try next provider
 
         error_msg = f"All LLM providers failed. Last error: {last_error}"
         logger.error(error_msg)
