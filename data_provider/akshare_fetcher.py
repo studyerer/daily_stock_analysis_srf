@@ -1464,81 +1464,80 @@ class AkshareFetcher(BaseFetcher):
         获取板块涨跌榜
 
         数据源优先级：
-        1. 东财接口 (ak.stock_board_industry_name_em)
-        2. 新浪接口 (ak.stock_sector_spot)
+        1. 新浪接口 (ak.stock_sector_spot) - 稳定性高，优先使用
+        2. 东财接口 (ak.stock_board_industry_name_em) - 数据更全但易 RemoteDisconnected
         """
         import akshare as ak
 
-        # 优先东财接口
-        try:
-            self._set_random_user_agent()
-            self._enforce_rate_limit()
-
-            logger.info("[API调用] ak.stock_board_industry_name_em() 获取板块排行...")
-            df = ak.stock_board_industry_name_em()
-            if df is not None and not df.empty:
-                change_col = '涨跌幅'
-                if change_col in df.columns:
-                    df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
-                    df = df.dropna(subset=[change_col])
-
-                    # 涨幅前n
-                    top = df.nlargest(n, change_col)
-                    top_sectors = [
-                        {'name': row['板块名称'], 'change_pct': row[change_col]}
-                        for _, row in top.iterrows()
-                    ]
-
-                    bottom = df.nsmallest(n, change_col)
-                    bottom_sectors = [
-                        {'name': row['板块名称'], 'change_pct': row[change_col]}
-                        for _, row in bottom.iterrows()
-                    ]
-
-                    return top_sectors, bottom_sectors
-        except Exception as e:
-            logger.warning(f"[Akshare] 东财接口获取板块排行失败: {e}，尝试新浪接口")
-
-        # 东财失败后，尝试新浪接口
+        # 优先新浪接口（稳定）
         try:
             self._set_random_user_agent()
             self._enforce_rate_limit()
 
             logger.info("[API调用] ak.stock_sector_spot() 获取板块排行(新浪)...")
             df = ak.stock_sector_spot(indicator='新浪行业')
+            if df is not None and not df.empty:
+                change_col = None
+                for col in ['涨跌幅', 'change_pct', '涨幅']:
+                    if col in df.columns:
+                        change_col = col
+                        break
+
+                name_col = None
+                for col in ['板块', '板块名称', 'label', 'name']:
+                    if col in df.columns:
+                        name_col = col
+                        break
+
+                if change_col and name_col:
+                    df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
+                    df = df.dropna(subset=[change_col])
+                    top = df.nlargest(n, change_col)
+                    bottom = df.nsmallest(n, change_col)
+                    top_sectors = [
+                        {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
+                        for _, row in top.iterrows()
+                    ]
+                    bottom_sectors = [
+                        {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
+                        for _, row in bottom.iterrows()
+                    ]
+                    return top_sectors, bottom_sectors
+        except Exception as e:
+            logger.warning(f"[Akshare] 新浪接口获取板块排行失败: {e}，尝试东财接口")
+
+        # 新浪失败后再试东财接口
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info("[API调用] ak.stock_board_industry_name_em() 获取板块排行...")
+            df = ak.stock_board_industry_name_em()
             if df is None or df.empty:
                 return None
 
-            change_col = None
-            for col in ['涨跌幅', 'change_pct', '涨幅']:
-                if col in df.columns:
-                    change_col = col
-                    break
-
-            name_col = None
-            for col in ['板块', '板块名称', 'label', 'name']:
-                if col in df.columns:
-                    name_col = col
-                    break
-
-            if not change_col or not name_col:
+            change_col = '涨跌幅'
+            if change_col not in df.columns:
                 return None
 
             df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
             df = df.dropna(subset=[change_col])
+
             top = df.nlargest(n, change_col)
-            bottom = df.nsmallest(n, change_col)
             top_sectors = [
-                {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
+                {'name': row['板块名称'], 'change_pct': row[change_col]}
                 for _, row in top.iterrows()
             ]
+
+            bottom = df.nsmallest(n, change_col)
             bottom_sectors = [
-                {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
+                {'name': row['板块名称'], 'change_pct': row[change_col]}
                 for _, row in bottom.iterrows()
             ]
+
             return top_sectors, bottom_sectors
         except Exception as e:
-            logger.error(f"[Akshare] 新浪接口获取板块排行也失败: {e}")
+            logger.error(f"[Akshare] 东财接口获取板块排行也失败: {e}")
             return None
 
 

@@ -23,7 +23,7 @@ import pandas as pd
 
 from src.config import get_config, Config
 from src.storage import get_db
-from data_provider import DataFetcherManager
+from data_provider import DataFetcherManager, get_default_manager
 from data_provider.realtime_types import ChipDistribution
 from src.analyzer import GeminiAnalyzer, AnalysisResult, STOCK_NAME_MAP
 from src.notification import NotificationService, NotificationChannel
@@ -74,7 +74,8 @@ class StockAnalysisPipeline:
         
         # 初始化各模块
         self.db = get_db()
-        self.fetcher_manager = DataFetcherManager()
+        # 使用进程内共享的单例，让 pipeline 与 agent tools 共用同一份内存缓存
+        self.fetcher_manager = get_default_manager()
         # 不再单独创建 akshare_fetcher，统一使用 fetcher_manager 获取增强数据
         self.trend_analyzer = StockTrendAnalyzer()  # 趋势分析器
         self.analyzer = GeminiAnalyzer()
@@ -501,6 +502,10 @@ class StockAnalysisPipeline:
         """
         try:
             from src.agent.factory import build_agent_executor
+            from src.agent.tools.search_tools import (
+                clear_captured_news_response,
+                get_captured_news_response,
+            )
 
             # Build executor from shared factory (ToolRegistry and SkillManager prototype are cached)
             executor = build_agent_executor(self.config, getattr(self.config, 'agent_skills', None) or None)
@@ -511,11 +516,14 @@ class StockAnalysisPipeline:
                 "stock_name": stock_name,
                 "report_type": report_type.value,
             }
-            
+
             if realtime_quote:
                 initial_context["realtime_quote"] = self._safe_to_dict(realtime_quote)
             if chip_data:
                 initial_context["chip_distribution"] = self._safe_to_dict(chip_data)
+
+            # 清空可能存在的旧捕获结果，避免跨股票串味
+            clear_captured_news_response(code)
 
             # 运行 Agent
             message = f"请分析股票 {code} ({stock_name})，并生成决策仪表盘报告。"
@@ -524,15 +532,20 @@ class StockAnalysisPipeline:
             # 转换为 AnalysisResult
             result = self._agent_result_to_analysis_result(agent_result, code, stock_name, report_type, query_id)
 
-            # 保存新闻情报到数据库（Agent 工具结果仅用于 LLM 上下文，未持久化，Fixes #396）
-            # 使用 search_stock_news（与 Agent 工具调用逻辑一致），仅 1 次 API 调用，无额外延迟
+            # 保存新闻情报到数据库（Agent 工具结果默认仅用于 LLM，需显式持久化，Fixes #396）
+            # 优先复用 Agent 的 search_stock_news 已经搜到的结果，避免重复一次 Bocha 调用
             if self.search_service.is_available:
                 try:
-                    news_response = self.search_service.search_stock_news(
-                        stock_code=code,
-                        stock_name=stock_name,
-                        max_results=5
-                    )
+                    captured = get_captured_news_response(code)
+                    if captured is not None:
+                        news_response = captured
+                        logger.debug(f"[{code}] Agent 模式: 复用 Agent 已搜的新闻结果")
+                    else:
+                        news_response = self.search_service.search_stock_news(
+                            stock_code=code,
+                            stock_name=stock_name,
+                            max_results=5
+                        )
                     if news_response.success and news_response.results:
                         query_context = self._build_query_context(query_id=query_id)
                         self.db.save_news_intel(

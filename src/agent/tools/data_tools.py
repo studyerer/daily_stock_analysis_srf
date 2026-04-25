@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 
 
 def _get_fetcher_manager():
-    """Lazy import to avoid circular deps."""
-    from data_provider import DataFetcherManager
-    return DataFetcherManager()
+    """Lazy import to avoid circular deps. Returns the shared singleton manager."""
+    from data_provider import get_default_manager
+    return get_default_manager()
 
 
 def _get_db():
@@ -223,9 +223,22 @@ get_analysis_context_tool = ToolDefinition(
 def _handle_get_stock_info(stock_code: str) -> dict:
     """Get stock fundamental information including industry, financials, and valuation."""
     # Try EfinanceFetcher.get_base_info first (most complete)
+    # 复用 singleton manager 内的 EfinanceFetcher 实例，让熔断器状态共享
+    fetcher = None
     try:
-        from data_provider.efinance_fetcher import EfinanceFetcher
-        fetcher = EfinanceFetcher()
+        manager = _get_fetcher_manager()
+        for f in getattr(manager, "_fetchers", []):
+            if f.name == "EfinanceFetcher":
+                fetcher = f
+                break
+    except Exception as e:
+        logger.debug(f"get_stock_info: 未能从 manager 取到 EfinanceFetcher: {e}")
+
+    try:
+        if fetcher is None:
+            # 兜底：罕见路径（manager 不可用），直接构造一次
+            from data_provider.efinance_fetcher import EfinanceFetcher
+            fetcher = EfinanceFetcher()
         info = fetcher.get_base_info(stock_code)
         if info:
             # Sanitise: convert non-serialisable types and remove NaN

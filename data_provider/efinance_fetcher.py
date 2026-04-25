@@ -792,6 +792,13 @@ class EfinanceFetcher(BaseFetcher):
         获取板块涨跌榜 (efinance)
         """
         import efinance as ef
+        from .realtime_types import get_efinance_aux_circuit_breaker
+
+        breaker = get_efinance_aux_circuit_breaker()
+        breaker_key = "efinance_sector"
+        if not breaker.is_available(breaker_key):
+            logger.debug("[efinance] 板块排行接口熔断中，跳过")
+            return None
 
         try:
             self._set_random_user_agent()
@@ -801,11 +808,13 @@ class EfinanceFetcher(BaseFetcher):
             df = ef.stock.get_realtime_quotes(['行业板块'])
             if df is None or df.empty:
                 logger.warning("[efinance] 板块行情数据为空")
+                breaker.record_failure(breaker_key, "empty data")
                 return None
 
             change_col = '涨跌幅' if '涨跌幅' in df.columns else 'pct_chg'
             name_col = '股票名称' if '股票名称' in df.columns else 'name'
             if change_col not in df.columns or name_col not in df.columns:
+                breaker.record_failure(breaker_key, "missing columns")
                 return None
 
             df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
@@ -821,55 +830,71 @@ class EfinanceFetcher(BaseFetcher):
                 {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
                 for _, row in bottom.iterrows()
             ]
+            breaker.record_success(breaker_key)
             return top_sectors, bottom_sectors
         except Exception as e:
             logger.error(f"[efinance] 获取板块排行失败: {e}")
+            breaker.record_failure(breaker_key, str(e))
             return None
     
     def get_base_info(self, stock_code: str) -> Optional[Dict[str, Any]]:
         """
         获取股票基本信息
-        
+
         数据来源：ef.stock.get_base_info()
         包含：市盈率、市净率、所处行业、总市值、流通市值、ROE、净利率等
-        
+
         Args:
             stock_code: 股票代码
-            
+
         Returns:
             包含基本信息的字典，获取失败返回 None
         """
         import efinance as ef
-        
+        from .realtime_types import get_efinance_aux_circuit_breaker
+
+        breaker = get_efinance_aux_circuit_breaker()
+        breaker_key = "efinance_base_info"
+        if not breaker.is_available(breaker_key):
+            logger.debug(f"[efinance] base_info 接口熔断中，跳过 {stock_code}")
+            return None
+
         try:
             # 防封禁策略
             self._set_random_user_agent()
             self._enforce_rate_limit()
-            
+
             logger.info(f"[API调用] ef.stock.get_base_info(stock_codes={stock_code}) 获取基本信息...")
             import time as _time
             api_start = _time.time()
-            
+
             info = ef.stock.get_base_info(stock_code)
-            
+
             api_elapsed = _time.time() - api_start
             logger.info(f"[API返回] ef.stock.get_base_info 成功, 耗时 {api_elapsed:.2f}s")
-            
+
             if info is None:
                 logger.warning(f"[API返回] 未获取到 {stock_code} 的基本信息")
+                breaker.record_failure(breaker_key, "empty info")
                 return None
-            
+
             # 转换为字典
+            result: Optional[Dict[str, Any]] = None
             if isinstance(info, pd.Series):
-                return info.to_dict()
+                result = info.to_dict()
             elif isinstance(info, pd.DataFrame):
                 if not info.empty:
-                    return info.iloc[0].to_dict()
-            
-            return None
-            
+                    result = info.iloc[0].to_dict()
+
+            if result is not None:
+                breaker.record_success(breaker_key)
+            else:
+                breaker.record_failure(breaker_key, "unrecognized return type")
+            return result
+
         except Exception as e:
             logger.error(f"[API错误] 获取 {stock_code} 基本信息失败: {e}")
+            breaker.record_failure(breaker_key, str(e))
             return None
     
     def get_belong_board(self, stock_code: str) -> Optional[pd.DataFrame]:

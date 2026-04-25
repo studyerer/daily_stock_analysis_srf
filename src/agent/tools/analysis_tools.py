@@ -97,10 +97,10 @@ analyze_trend_tool = ToolDefinition(
 
 def _handle_calculate_ma(stock_code: str, periods: Optional[str] = None, days: int = 120) -> dict:
     """Calculate moving averages for arbitrary periods from historical K-line data."""
-    from data_provider import DataFetcherManager
+    from data_provider import get_default_manager
     import pandas as pd
 
-    manager = DataFetcherManager()
+    manager = get_default_manager()
     df, source = manager.get_daily_data(stock_code, days=days)
 
     if df is None or df.empty:
@@ -190,10 +190,10 @@ calculate_ma_tool = ToolDefinition(
 
 def _handle_get_volume_analysis(stock_code: str, days: int = 30) -> dict:
     """Analyse volume-price patterns over recent trading days."""
-    from data_provider import DataFetcherManager
+    from data_provider import get_default_manager
     import pandas as pd
 
-    manager = DataFetcherManager()
+    manager = get_default_manager()
     df, source = manager.get_daily_data(stock_code, days=max(days + 20, 60))
 
     if df is None or df.empty:
@@ -307,10 +307,10 @@ get_volume_analysis_tool = ToolDefinition(
 
 def _handle_analyze_pattern(stock_code: str, days: int = 60) -> dict:
     """Detect common candlestick and chart patterns in recent price history."""
-    from data_provider import DataFetcherManager
+    from data_provider import get_default_manager
     import pandas as pd
 
-    manager = DataFetcherManager()
+    manager = get_default_manager()
     df, source = manager.get_daily_data(stock_code, days=max(days, 120))
 
     if df is None or df.empty:

@@ -122,8 +122,8 @@ def get_stock_name_multi_source(
     # 3. 从数据源获取
     if data_manager is None:
         try:
-            from data_provider.base import DataFetcherManager
-            data_manager = DataFetcherManager()
+            from data_provider import get_default_manager
+            data_manager = get_default_manager()
         except Exception as e:
             logger.debug(f"无法初始化 DataFetcherManager: {e}")
 

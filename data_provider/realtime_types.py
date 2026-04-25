@@ -403,6 +403,14 @@ _chip_circuit_breaker = CircuitBreaker(
     half_open_max_calls=1
 )
 
+# Efinance 辅助接口（get_base_info / get_sector_rankings）熔断器
+# 这些接口在生产环境中频繁返回非 JSON（HTML 反爬页），需要快速降级到其他源
+_efinance_aux_circuit_breaker = CircuitBreaker(
+    failure_threshold=2,      # 连续失败2次熔断（这两个接口要么正常要么持续失败）
+    cooldown_seconds=900.0,   # 冷却15分钟（避免短时间内反复试探）
+    half_open_max_calls=1
+)
+
 
 def get_realtime_circuit_breaker() -> CircuitBreaker:
     """获取实时行情熔断器"""
@@ -412,3 +420,8 @@ def get_realtime_circuit_breaker() -> CircuitBreaker:
 def get_chip_circuit_breaker() -> CircuitBreaker:
     """获取筹码接口熔断器"""
     return _chip_circuit_breaker
+
+
+def get_efinance_aux_circuit_breaker() -> CircuitBreaker:
+    """获取 efinance 辅助接口熔断器（base_info / sector_rankings）"""
+    return _efinance_aux_circuit_breaker

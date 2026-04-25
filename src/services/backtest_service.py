@@ -242,11 +242,11 @@ class BacktestService:
 
     def _try_fill_daily_data(self, *, code: str, analysis_date: date, eval_window_days: int) -> None:
         try:
-            from data_provider.base import DataFetcherManager
+            from data_provider import get_default_manager
 
             # fetch a window that covers start + forward bars
             end_date = analysis_date + timedelta(days=max(eval_window_days * 2, 30))
-            manager = DataFetcherManager()
+            manager = get_default_manager()
             df, source = manager.get_daily_data(
                 stock_code=code,
                 start_date=analysis_date.strftime("%Y-%m-%d"),

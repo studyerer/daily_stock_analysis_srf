@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 def _get_fetcher_manager():
-    """Lazy import to avoid circular deps."""
-    from data_provider import DataFetcherManager
-    return DataFetcherManager()
+    """Lazy import to avoid circular deps. Returns the shared singleton manager."""
+    from data_provider import get_default_manager
+    return get_default_manager()
 
 
 # ============================================================

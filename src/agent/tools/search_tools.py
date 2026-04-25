@@ -8,11 +8,41 @@ Tools:
 """
 
 import logging
-from typing import Optional
+import threading
+from typing import Optional, Any
 
 from src.agent.tools.registry import ToolParameter, ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# 新闻搜索结果捕获（避免 Pipeline 在 Agent 之后重复搜一次）
+# ============================================================
+# 思路：Agent 调用 search_stock_news 时把 SearchResponse 缓存到这里，
+# Pipeline 在 Agent 完成后读取并保存到 DB；找不到时再退化到 Pipeline 自行搜索。
+_news_captures: dict = {}
+_news_captures_lock = threading.Lock()
+
+
+def capture_news_response(stock_code: str, response: Any) -> None:
+    """供 search_stock_news tool 调用：记录最近一次成功的 SearchResponse。"""
+    if not stock_code or response is None:
+        return
+    with _news_captures_lock:
+        _news_captures[stock_code] = response
+
+
+def get_captured_news_response(stock_code: str) -> Optional[Any]:
+    """供 Pipeline 调用：读取并清空指定股票的捕获结果。"""
+    with _news_captures_lock:
+        return _news_captures.pop(stock_code, None)
+
+
+def clear_captured_news_response(stock_code: str) -> None:
+    """供 Pipeline 在 Agent 运行前清理可能的旧结果（防止跨股票串味）。"""
+    with _news_captures_lock:
+        _news_captures.pop(stock_code, None)
 
 
 def _get_search_service():
@@ -44,6 +74,10 @@ def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
             "success": False,
             "error": response.error_message,
         }
+
+    # 捕获原始响应对象，让 Pipeline 不再重复搜索一次
+    if response.results:
+        capture_news_response(stock_code, response)
 
     return {
         "query": response.query,

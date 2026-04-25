@@ -15,7 +15,9 @@
 """
 
 import logging
+import os
 import random
+import threading
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -339,15 +341,26 @@ class DataFetcherManager:
     - 所有数据源都失败时抛出异常
     """
     
+    # 内存缓存的 TTL（秒）。读取环境变量允许调优，默认值已覆盖典型分析周期。
+    _DAILY_CACHE_TTL = int(os.getenv("DATA_DAILY_CACHE_TTL", "600"))
+    _REALTIME_CACHE_TTL = int(os.getenv("DATA_REALTIME_CACHE_TTL", "300"))
+
     def __init__(self, fetchers: Optional[List[BaseFetcher]] = None):
         """
         初始化管理器
-        
+
         Args:
             fetchers: 数据源列表（可选，默认按优先级自动创建）
         """
         self._fetchers: List[BaseFetcher] = []
-        
+
+        # 内存缓存：避免同一进程内重复请求同一份数据
+        # _daily_cache: {(code, days): (df, source, timestamp)}
+        # _realtime_cache: {code: (UnifiedRealtimeQuote, timestamp)}
+        self._daily_cache: Dict[Tuple[str, int], Tuple[pd.DataFrame, str, float]] = {}
+        self._realtime_cache: Dict[str, Tuple[Any, float]] = {}
+        self._cache_lock = threading.Lock()
+
         if fetchers:
             # 按优先级排序
             self._fetchers = sorted(fetchers, key=lambda f: f.priority)
@@ -443,6 +456,23 @@ class DataFetcherManager:
         # Normalize code (strip SH/SZ prefix etc.)
         stock_code = normalize_stock_code(stock_code)
 
+        # 命中缓存：仅在调用方未指定显式日期范围时使用
+        # （日期范围灵活时缓存难以保证一致性，安全做法是绕过）
+        cache_key: Optional[Tuple[str, int]] = None
+        if start_date is None and end_date is None:
+            cache_key = (stock_code, int(days))
+            with self._cache_lock:
+                cached = self._daily_cache.get(cache_key)
+            if cached is not None:
+                df_cached, source_cached, ts = cached
+                if time.time() - ts < self._DAILY_CACHE_TTL:
+                    logger.debug(
+                        f"[缓存命中] daily {stock_code} days={days} "
+                        f"(age={int(time.time() - ts)}s, source={source_cached})"
+                    )
+                    # 返回 copy，防止下游修改污染缓存
+                    return df_cached.copy(), source_cached
+
         errors = []
 
         # 快速路径：美股指数与美股股票直接路由到 YfinanceFetcher
@@ -459,6 +489,9 @@ class DataFetcherManager:
                         )
                         if df is not None and not df.empty:
                             logger.info(f"[{fetcher.name}] 成功获取 {stock_code}")
+                            if cache_key is not None:
+                                with self._cache_lock:
+                                    self._daily_cache[cache_key] = (df, fetcher.name, time.time())
                             return df, fetcher.name
                     except Exception as e:
                         error_msg = f"[{fetcher.name}] 失败: {str(e)}"
@@ -479,9 +512,12 @@ class DataFetcherManager:
                     end_date=end_date,
                     days=days
                 )
-                
+
                 if df is not None and not df.empty:
                     logger.info(f"[{fetcher.name}] 成功获取 {stock_code}")
+                    if cache_key is not None:
+                        with self._cache_lock:
+                            self._daily_cache[cache_key] = (df, fetcher.name, time.time())
                     return df, fetcher.name
                     
             except Exception as e:
@@ -610,6 +646,25 @@ class DataFetcherManager:
             logger.debug(f"[实时行情] 功能已禁用，跳过 {stock_code}")
             return None
 
+        # 命中缓存：避免同一只股票在分析周期内被反复"双拉"（主源+补字段）
+        with self._cache_lock:
+            cached = self._realtime_cache.get(stock_code)
+        if cached is not None:
+            quote_cached, ts = cached
+            if time.time() - ts < self._REALTIME_CACHE_TTL:
+                logger.debug(
+                    f"[缓存命中] realtime {stock_code} "
+                    f"(age={int(time.time() - ts)}s)"
+                )
+                return quote_cached
+
+        def _store(q):
+            """写回缓存的 helper（return 前调用）"""
+            if q is not None:
+                with self._cache_lock:
+                    self._realtime_cache[stock_code] = (q, time.time())
+            return q
+
         # 美股指数由 YfinanceFetcher 处理（在美股股票检查之前）
         if is_us_index_code(stock_code):
             for fetcher in self._fetchers:
@@ -619,7 +674,7 @@ class DataFetcherManager:
                             quote = fetcher.get_realtime_quote(stock_code)
                             if quote is not None:
                                 logger.info(f"[实时行情] 美股指数 {stock_code} 成功获取 (来源: yfinance)")
-                                return quote
+                                return _store(quote)
                         except Exception as e:
                             logger.warning(f"[实时行情] 美股指数 {stock_code} 获取失败: {e}")
                     break
@@ -635,7 +690,7 @@ class DataFetcherManager:
                             quote = fetcher.get_realtime_quote(stock_code)
                             if quote is not None:
                                 logger.info(f"[实时行情] 美股 {stock_code} 成功获取 (来源: yfinance)")
-                                return quote
+                                return _store(quote)
                         except Exception as e:
                             logger.warning(f"[实时行情] 美股 {stock_code} 获取失败: {e}")
                     break
@@ -703,7 +758,7 @@ class DataFetcherManager:
                         logger.info(f"[实时行情] {stock_code} 成功获取 (来源: {source})")
                         # If all key supplementary fields are present, return early
                         if not self._quote_needs_supplement(primary_quote):
-                            return primary_quote
+                            return _store(primary_quote)
                         # Otherwise, continue to try later sources for missing fields
                         logger.debug(f"[实时行情] {stock_code} 部分字段缺失，尝试从后续数据源补充")
                         supplement_attempts = 0
@@ -728,7 +783,7 @@ class DataFetcherManager:
         
         # Return primary even if some fields are still missing
         if primary_quote is not None:
-            return primary_quote
+            return _store(primary_quote)
 
         # 所有数据源都失败，返回 None（降级兜底）
         if errors:
