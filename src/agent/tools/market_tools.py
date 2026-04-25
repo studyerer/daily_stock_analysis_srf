@@ -8,10 +8,21 @@ Tools:
 """
 
 import logging
+import threading
+import time
 
 from src.agent.tools.registry import ToolParameter, ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+# ── 板块排行当日缓存（同一交易日只调一次 API） ──────────────
+_sector_cache_lock = threading.Lock()
+_sector_cache: dict = {
+    "timestamp": 0.0,
+    "data": None,
+    "top_n": 0,
+}
+_SECTOR_CACHE_TTL = 3600  # 1 小时过期
 
 
 def _get_fetcher_manager():
@@ -63,12 +74,41 @@ get_market_indices_tool = ToolDefinition(
 # ============================================================
 
 def _handle_get_sector_rankings(top_n: int = 10) -> dict:
-    """Get sector performance rankings."""
+    """Get sector performance rankings (with intra-run cache)."""
+    global _sector_cache
+
+    now = time.time()
+    with _sector_cache_lock:
+        cached = _sector_cache
+        if cached["data"] is not None and cached["top_n"] >= top_n and (now - cached["timestamp"]) < _SECTOR_CACHE_TTL:
+            logger.debug("板块排行命中缓存 (age=%.0fs)", now - cached["timestamp"])
+            result = cached["data"]
+            # 如果缓存的 top_n 比请求的大，截取前 top_n
+            if isinstance(result, tuple) and len(result) == 2:
+                top_sectors, bottom_sectors = result
+                return {
+                    "top_sectors": top_sectors[:top_n],
+                    "bottom_sectors": bottom_sectors[:top_n],
+                }
+            elif isinstance(result, list):
+                return {"sectors": result}
+            else:
+                return {"data": str(result)}
+
+    # 缓存未命中，调用 API
     manager = _get_fetcher_manager()
     result = manager.get_sector_rankings(n=top_n)
 
     if result is None:
         return {"error": "No sector ranking data available"}
+
+    # 写入缓存
+    with _sector_cache_lock:
+        _sector_cache = {
+            "timestamp": time.time(),
+            "data": result,
+            "top_n": top_n,
+        }
 
     # get_sector_rankings returns Tuple[List[Dict], List[Dict]]
     # (top_sectors, bottom_sectors)
