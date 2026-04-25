@@ -222,26 +222,43 @@ get_analysis_context_tool = ToolDefinition(
 
 def _handle_get_stock_info(stock_code: str) -> dict:
     """Get stock fundamental information including industry, financials, and valuation."""
-    # Try EfinanceFetcher.get_base_info first (most complete)
-    # 复用 singleton manager 内的 EfinanceFetcher 实例，让熔断器状态共享
-    fetcher = None
+    # 1. TushareFetcher: stock_basic + fina_indicator + forecast（最可靠）
+    # 复用 singleton manager 内的实例，保持缓存和熔断器状态共享
+    try:
+        manager = _get_fetcher_manager()
+        ts_fetcher = None
+        for f in getattr(manager, "_fetchers", []):
+            if f.name == "TushareFetcher":
+                ts_fetcher = f
+                break
+        if ts_fetcher is None:
+            from data_provider.tushare_fetcher import TushareFetcher
+            ts_fetcher = TushareFetcher()
+        if ts_fetcher.is_available():
+            info = ts_fetcher.get_fundamentals(stock_code)
+            if info:
+                logger.info(f"[get_stock_info] {stock_code} 基本面数据来自 Tushare")
+                return info
+    except Exception as e:
+        logger.warning(f"get_stock_info via TushareFetcher failed for {stock_code}: {e}")
+
+    # 2. EfinanceFetcher fallback
+    ef_fetcher = None
     try:
         manager = _get_fetcher_manager()
         for f in getattr(manager, "_fetchers", []):
             if f.name == "EfinanceFetcher":
-                fetcher = f
+                ef_fetcher = f
                 break
     except Exception as e:
         logger.debug(f"get_stock_info: 未能从 manager 取到 EfinanceFetcher: {e}")
 
     try:
-        if fetcher is None:
-            # 兜底：罕见路径（manager 不可用），直接构造一次
+        if ef_fetcher is None:
             from data_provider.efinance_fetcher import EfinanceFetcher
-            fetcher = EfinanceFetcher()
-        info = fetcher.get_base_info(stock_code)
+            ef_fetcher = EfinanceFetcher()
+        info = ef_fetcher.get_base_info(stock_code)
         if info:
-            # Sanitise: convert non-serialisable types and remove NaN
             import math
             clean: dict = {}
             for k, v in info.items():
@@ -250,18 +267,15 @@ def _handle_get_stock_info(stock_code: str) -> dict:
                 else:
                     try:
                         import json as _json
-                        _json.dumps(v)       # test serialisability
+                        _json.dumps(v)
                         clean[k] = v
                     except (TypeError, ValueError):
                         clean[k] = str(v)
 
-            # Also try to get board/sector membership
             try:
-                board_df = fetcher.get_belong_board(stock_code)
+                board_df = ef_fetcher.get_belong_board(stock_code)
                 if board_df is not None and not board_df.empty:
-                    # Typically columns: 板块名称, 板块代码, 涨跌幅, …
                     boards = board_df.to_dict(orient="records")
-                    # Keep only name + change columns to limit token usage
                     clean["belong_boards"] = [
                         {k2: (str(v2) if not isinstance(v2, (int, float, str, type(None))) else v2)
                          for k2, v2 in row.items()
@@ -275,7 +289,7 @@ def _handle_get_stock_info(stock_code: str) -> dict:
     except Exception as e:
         logger.warning(f"get_stock_info via EfinanceFetcher failed for {stock_code}: {e}")
 
-    # Fallback: derive from realtime quote (valuation metrics only)
+    # 3. Last resort: realtime quote (valuation metrics only)
     manager = _get_fetcher_manager()
     quote = manager.get_realtime_quote(stock_code)
     if quote:
@@ -286,7 +300,7 @@ def _handle_get_stock_info(stock_code: str) -> dict:
             "pb_ratio": quote.pb_ratio,
             "total_mv": quote.total_mv,
             "circ_mv": quote.circ_mv,
-            "note": "Basic info only — EfinanceFetcher unavailable",
+            "note": "Basic info only — TushareFetcher and EfinanceFetcher unavailable",
         }
     return {"error": f"Unable to fetch stock info for {stock_code}"}
 

@@ -852,6 +852,139 @@ class TushareFetcher(BaseFetcher):
 
         return None
 
+    def get_fundamentals(self, stock_code: str) -> Optional[dict]:
+        """
+        获取股票基本面数据
+
+        合并调用三个 Tushare Pro 接口：
+        - stock_basic     : 公司基本信息（行业、市场、上市日期）  积分：低
+        - fina_indicator  : 最近一期财务指标（ROE / 增速 / 毛利率）积分：2000
+        - forecast        : 近 180 天业绩预告（风险信号）          积分：2000
+
+        结果在实例内缓存，同一 stock_code 只向 Tushare 请求一次。
+
+        Returns:
+            dict: 含 name/industry/financials/forecast 等字段；
+                  API 不可用或非 A 股时返回 None。
+        """
+        if self._api is None:
+            return None
+        if _is_us_code(stock_code) or _is_etf_code(stock_code):
+            return None
+
+        # 实例级缓存：同一进程内不重复拉取
+        if not hasattr(self, '_fundamentals_cache'):
+            self._fundamentals_cache: dict = {}
+        if stock_code in self._fundamentals_cache:
+            return self._fundamentals_cache[stock_code]
+
+        ts_code = self._convert_stock_code(stock_code)
+        result: dict = {"code": stock_code, "source": "tushare"}
+
+        def _safe(val) -> Optional[float]:
+            import math
+            if val is None:
+                return None
+            try:
+                f = float(val)
+                return None if math.isnan(f) else round(f, 2)
+            except (TypeError, ValueError):
+                return None
+
+        # ---- 1. stock_basic：公司基本信息 ----
+        try:
+            self._check_rate_limit()
+            df = self._api.stock_basic(
+                ts_code=ts_code,
+                fields='ts_code,name,fullname,industry,market,list_date,area'
+            )
+            if df is not None and not df.empty:
+                row = df.iloc[0]
+                result.update({
+                    "name":      str(row.get("name", "")      or ""),
+                    "fullname":  str(row.get("fullname", "")  or ""),
+                    "industry":  str(row.get("industry", "")  or ""),
+                    "market":    str(row.get("market", "")    or ""),
+                    "area":      str(row.get("area", "")      or ""),
+                    "list_date": str(row.get("list_date", "") or ""),
+                })
+        except Exception as e:
+            logger.warning(f"[Tushare] stock_basic 获取失败 {stock_code}: {e}")
+
+        # ---- 2. fina_indicator：最新一期财务指标 ----
+        try:
+            self._check_rate_limit()
+            df = self._api.fina_indicator(
+                ts_code=ts_code,
+                fields=(
+                    'ts_code,end_date,roe,netprofit_yoy,or_yoy,'
+                    'grossprofit_margin,netprofit_margin,debt_to_assets,'
+                    'eps,bps,current_ratio,quick_ratio'
+                )
+            )
+            if df is not None and not df.empty:
+                df = df.sort_values('end_date', ascending=False)
+                row = df.iloc[0]
+                result["financials"] = {
+                    "period":             str(row.get("end_date", "") or ""),
+                    "roe":                _safe(row.get("roe")),
+                    "netprofit_yoy":      _safe(row.get("netprofit_yoy")),
+                    "or_yoy":             _safe(row.get("or_yoy")),
+                    "grossprofit_margin": _safe(row.get("grossprofit_margin")),
+                    "netprofit_margin":   _safe(row.get("netprofit_margin")),
+                    "debt_to_assets":     _safe(row.get("debt_to_assets")),
+                    "eps":                _safe(row.get("eps")),
+                    "bps":                _safe(row.get("bps")),
+                    "current_ratio":      _safe(row.get("current_ratio")),
+                    "quick_ratio":        _safe(row.get("quick_ratio")),
+                }
+                logger.info(
+                    f"[Tushare] fina_indicator {stock_code}: "
+                    f"期间={result['financials']['period']}, "
+                    f"ROE={result['financials']['roe']}%, "
+                    f"净利增速={result['financials']['netprofit_yoy']}%"
+                )
+        except Exception as e:
+            logger.warning(f"[Tushare] fina_indicator 获取失败 {stock_code}: {e}")
+
+        # ---- 3. forecast：近 180 天业绩预告 ----
+        try:
+            self._check_rate_limit()
+            end_date   = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - pd.Timedelta(days=180)).strftime('%Y%m%d')
+            df = self._api.forecast(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+                fields='ts_code,ann_date,end_date,type,p_change_min,p_change_max,summary'
+            )
+            if df is not None and not df.empty:
+                df = df.sort_values('ann_date', ascending=False)
+                row = df.iloc[0]
+                forecast_type = str(row.get("type", "") or "")
+                p_min = _safe(row.get("p_change_min"))
+                p_max = _safe(row.get("p_change_max"))
+                result["forecast"] = {
+                    "ann_date": str(row.get("ann_date", "") or ""),
+                    "period":   str(row.get("end_date",  "") or ""),
+                    "type":     forecast_type,
+                    "p_change_min": p_min,
+                    "p_change_max": p_max,
+                    "summary":  str(row.get("summary", "") or "")[:200],
+                }
+                logger.info(
+                    f"[Tushare] forecast {stock_code}: "
+                    f"类型={forecast_type}, 利润变动={p_min}%~{p_max}%"
+                )
+        except Exception as e:
+            logger.warning(f"[Tushare] forecast 获取失败 {stock_code}: {e}")
+
+        # 至少包含一项基本信息字段才算成功
+        if len(result) > 2:
+            self._fundamentals_cache[stock_code] = result
+            return result
+        return None
+
     def get_sector_rankings(self, n: int = 5) -> Optional[Tuple[list, list]]:
         """
         获取板块涨跌榜 (Tushare Pro)
