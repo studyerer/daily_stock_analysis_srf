@@ -8,7 +8,7 @@ Market Scanner — 全市场量化预筛选
 - 批量拉取 Tushare 全市场日线（日期维度，一次调用 ≈ 全市场 ~5000 只股票）
 - 本地 pandas 计算 MA / 量能 / 动量指标
 - 规则分层过滤 + 打分排序
-- 输出 Top N 候选股到 data/scan_candidates.json
+- 输出 Top N 候选股到 data/scan_candidates_YYYYMMDD.json
 
 设计要点：
 - 30 个交易日仅需 30 次 API 调用 + stock_basic 1 次 + daily_basic 1 次
@@ -27,8 +27,8 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# 默认输出路径
-DEFAULT_OUTPUT_PATH = os.path.join("data", "scan_candidates.json")
+# 默认输出目录
+DEFAULT_OUTPUT_DIR = "data"
 
 # 过滤参数默认值
 DEFAULT_FILTERS: Dict = {
@@ -41,6 +41,8 @@ DEFAULT_FILTERS: Dict = {
     "volume_ratio_min": 0.8,     # 量比下限
     "top_n": 30,                 # 输出候选数
     "exclude_bj": True,          # 排除北交所
+    "exclude_cyb": True,         # 排除创业板（300/301, 需要权限）
+    "exclude_kcb": True,         # 排除科创板（688/689, 需要权限）
     "exclude_st": True,          # 排除 ST / *ST / 退市整理
     "history_days": 30,          # 拉取历史天数（至少 20 以满足 MA20）
 }
@@ -91,9 +93,15 @@ def _fetch_all_daily(api, fetcher, trade_dates: List[str]) -> pd.DataFrame:
 # ------------------------------------------------------------------
 
 
+def _default_output_path() -> str:
+    """按日期生成输出路径，如 data/scan_candidates_20260425.json"""
+    today = datetime.now().strftime("%Y%m%d")
+    return os.path.join(DEFAULT_OUTPUT_DIR, f"scan_candidates_{today}.json")
+
+
 def scan_market(
     top_n: int = 30,
-    output_path: str = DEFAULT_OUTPUT_PATH,
+    output_path: Optional[str] = None,
     filters: Optional[Dict] = None,
 ) -> List[str]:
     """
@@ -109,6 +117,8 @@ def scan_market(
     7. 保存 JSON 结果
     """
     t0 = time.time()
+    if output_path is None:
+        output_path = _default_output_path()
     f: Dict = {**DEFAULT_FILTERS, **(filters or {})}
     f["top_n"] = top_n
 
@@ -134,6 +144,14 @@ def scan_market(
     if f.get("exclude_bj", True):
         stock_list = stock_list[~stock_list["ts_code"].str.endswith(".BJ")]
 
+    # 排除创业板（300xxx / 301xxx）
+    if f.get("exclude_cyb", True):
+        stock_list = stock_list[stock_list["market"] != "创业板"]
+
+    # 排除科创板（688xxx / 689xxx）
+    if f.get("exclude_kcb", True):
+        stock_list = stock_list[stock_list["market"] != "科创板"]
+
     # 排除上市不足 N 天
     stock_list["list_date_dt"] = pd.to_datetime(stock_list["list_date"], format="%Y%m%d")
     stock_list = stock_list[
@@ -142,9 +160,17 @@ def scan_market(
 
     valid_codes = set(stock_list["ts_code"].tolist())
     code_name_map = dict(zip(stock_list["ts_code"], stock_list["name"]))
+    excluded = "/".join(
+        x for x, flag in [
+            ("ST", f.get("exclude_st")),
+            ("北交所", f.get("exclude_bj")),
+            ("创业板", f.get("exclude_cyb")),
+            ("科创板", f.get("exclude_kcb")),
+        ] if flag
+    )
     logger.info(
         f"[Scanner] 有效股票: {len(valid_codes)} "
-        f"(总上市: {total_listed}, 排除 ST/北交所/上市<{f['min_list_days']}天)"
+        f"(总上市: {total_listed}, 排除 {excluded}/上市<{f['min_list_days']}天)"
     )
 
     # ================================================================
@@ -374,8 +400,32 @@ def scan_market(
     return result_codes
 
 
-def load_scan_candidates(path: str = DEFAULT_OUTPUT_PATH) -> List[str]:
-    """读取扫描结果文件，返回候选股代码列表。文件不存在返回空列表。"""
+def _find_latest_scan_file() -> Optional[str]:
+    """在 data/ 下找到最新的 scan_candidates_YYYYMMDD.json 文件。"""
+    import glob
+
+    pattern = os.path.join(DEFAULT_OUTPUT_DIR, "scan_candidates_*.json")
+    files = sorted(glob.glob(pattern), reverse=True)  # 按文件名降序 → 最新日期在前
+    return files[0] if files else None
+
+
+def load_scan_candidates(path: Optional[str] = None, latest: bool = False) -> List[str]:
+    """读取扫描结果文件，返回候选股代码列表。
+
+    Args:
+        path: 指定文件路径。为 None 时按 latest 参数决定策略。
+        latest: True 时查找 data/ 下最新的扫描文件；False 时查找当天文件。
+
+    文件不存在返回空列表。
+    """
+    if path is None:
+        if latest:
+            path = _find_latest_scan_file()
+            if path is None:
+                logger.warning("[Scanner] data/ 下未找到任何扫描结果文件")
+                return []
+        else:
+            path = _default_output_path()
     if not os.path.exists(path):
         return []
 
@@ -387,7 +437,7 @@ def load_scan_candidates(path: str = DEFAULT_OUTPUT_PATH) -> List[str]:
         trade_date = data.get("trade_date", "unknown")
         logger.info(
             f"[Scanner] 读取扫描候选: {len(codes)} 只 "
-            f"(扫描时间: {scan_date}, 交易日: {trade_date})"
+            f"(扫描时间: {scan_date}, 交易日: {trade_date}, 文件: {path})"
         )
         return codes
     except Exception as e:

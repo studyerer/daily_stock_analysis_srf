@@ -13,10 +13,11 @@ on:
         default: 'full'
         type: choice
         options:
-          - full          # 完整分析（扫描+股票+大盘）
-          - market-only   # 仅大盘复盘
-          - stocks-only   # 仅股票分析（含扫描）
-          - scan          # 仅全市场扫描（量化预筛选，不触发 AI 分析）
+          - full          # 完整流程：扫描 → 白名单+候选股 LLM 分析 → 大盘复盘
+          - whitelist     # 仅白名单股票 LLM 分析（不扫描、不复盘）
+          - candidates    # 扫描 → 仅对候选股 LLM 分析（不含白名单、不复盘）
+          - scan          # 仅全市场量化扫描（不触发 LLM 分析）
+          - market        # 仅大盘复盘
 
 # 并发控制：同一时间只运行一个分析任务
 concurrency:
@@ -154,7 +155,7 @@ jobs:
           # 系统配置
           # ==========================================
           LOG_LEVEL: INFO
-          MAX_WORKERS: ${{ vars.MAX_WORKERS || secrets.MAX_WORKERS || '1' }}
+          MAX_WORKERS: ${{ vars.MAX_WORKERS || secrets.MAX_WORKERS || '3' }}
           # GitHub Actions 环境建议关闭不稳定的数据源
           ENABLE_CHIP_DISTRIBUTION: 'true'
           # 实时行情数据源优先级（腾讯有量比且稳定，推荐首选）
@@ -205,16 +206,14 @@ jobs:
           echo "=========================================="
           echo ""
           
-          # 执行分析（full 和 stocks-only 模式自动先跑全市场扫描再分析）
-          if [ "$MODE" = "scan" ]; then
-            python main.py --scan
-          elif [ "$MODE" = "market-only" ]; then
-            python main.py --market-review
-          elif [ "$MODE" = "stocks-only" ]; then
-            python main.py --no-market-review
-          else
-            python main.py
-          fi
+          # 根据模式执行
+          case "$MODE" in
+            scan)        python main.py --scan ;;
+            whitelist)   python main.py --whitelist ;;
+            candidates)  python main.py --candidates ;;
+            market)      python main.py --market-review ;;
+            *)           python main.py ;;   # full: 扫描+合并+LLM+大盘复盘
+          esac
       
       - name: 上传分析报告
         uses: actions/upload-artifact@v4
@@ -224,6 +223,7 @@ jobs:
           path: |
             reports/
             logs/
+            data/
           retention-days: 30
       
       - name: 显示运行结果

@@ -184,11 +184,11 @@ def parse_arguments() -> argparse.Namespace:
         help='不保存分析上下文快照'
     )
 
-    # === 全市场扫描 ===
+    # === 全市场扫描 & 分析模式 ===
     parser.add_argument(
         '--scan',
         action='store_true',
-        help='全市场扫描模式：量化预筛选沪深主板股票，输出候选股到 data/scan_candidates.json'
+        help='scan 模式：仅全市场量化扫描，不触发 LLM 分析'
     )
 
     parser.add_argument(
@@ -196,6 +196,18 @@ def parse_arguments() -> argparse.Namespace:
         type=int,
         default=30,
         help='扫描模式输出候选股数量（默认 30）'
+    )
+
+    parser.add_argument(
+        '--whitelist',
+        action='store_true',
+        help='whitelist 模式：仅对白名单股票进行 LLM 分析（不扫描、不复盘）'
+    )
+
+    parser.add_argument(
+        '--candidates',
+        action='store_true',
+        help='candidates 模式：扫描 → 仅对候选股进行 LLM 分析（不含白名单、不复盘）'
     )
 
     # === Backtest ===
@@ -297,22 +309,23 @@ def run_full_analysis(
         # stock_codes = filtered_codes
         stock_codes = effective_codes
 
-        # 全市场扫描 → 候选股与白名单合并
-        try:
-            from src.core.market_scanner import scan_market
-            top_n = getattr(args, 'scan_top_n', 30) or 30
-            logger.info("===== 全市场扫描开始 =====")
-            scan_codes = scan_market(top_n=top_n)
-            if scan_codes:
-                whitelist_count = len(stock_codes)
-                merged = list(dict.fromkeys(stock_codes + scan_codes))  # 去重保序
-                logger.info(
-                    f"合并白名单({whitelist_count}只) + 扫描候选({len(scan_codes)}只) "
-                    f"= {len(merged)}只 (去重后)"
-                )
-                stock_codes = merged
-        except Exception as e:
-            logger.warning(f"全市场扫描失败，仅使用白名单: {e}")
+        # 全市场扫描 → 候选股与白名单合并（whitelist / candidates 模式跳过）
+        if not getattr(args, '_skip_scan', False):
+            try:
+                from src.core.market_scanner import scan_market
+                top_n = getattr(args, 'scan_top_n', 30) or 30
+                logger.info("===== 全市场扫描开始 =====")
+                scan_codes = scan_market(top_n=top_n)
+                if scan_codes:
+                    whitelist_count = len(stock_codes)
+                    merged = list(dict.fromkeys(stock_codes + scan_codes))  # 去重保序
+                    logger.info(
+                        f"合并白名单({whitelist_count}只) + 扫描候选({len(scan_codes)}只) "
+                        f"= {len(merged)}只 (去重后)"
+                    )
+                    stock_codes = merged
+            except Exception as e:
+                logger.warning(f"全市场扫描失败，仅使用白名单: {e}")
 
         logger.info("股票有: %s", stock_codes)
 
@@ -622,9 +635,9 @@ def main() -> int:
             )
             return 0
 
-        # 模式: 仅全市场扫描（不触发 AI 分析，调试/手动用）
+        # 模式: scan — 仅全市场量化扫描，不触发 LLM 分析
         if getattr(args, 'scan', False):
-            logger.info("模式: 仅全市场扫描")
+            logger.info("模式: scan（仅全市场扫描）")
             from src.core.market_scanner import scan_market
 
             top_n = getattr(args, 'scan_top_n', 30) or 30
@@ -632,7 +645,31 @@ def main() -> int:
             logger.info(f"扫描完成，共 {len(candidates)} 只候选股（仅扫描模式，不进行 AI 分析）")
             return 0
 
-        # 模式1: 仅大盘复盘
+        # 模式: whitelist — 仅白名单股票 LLM 分析（不扫描、不复盘）
+        if getattr(args, 'whitelist', False):
+            logger.info("模式: whitelist（仅白名单股票分析）")
+            args.no_market_review = True   # 强制跳过大盘复盘
+            args._skip_scan = True         # 标记跳过扫描
+            run_full_analysis(config, args, stock_codes)
+            return 0
+
+        # 模式: candidates — 扫描 → 仅对候选股 LLM 分析（不含白名单、不复盘）
+        if getattr(args, 'candidates', False):
+            from src.core.market_scanner import scan_market
+
+            logger.info("模式: candidates（扫描 + 仅候选股分析）")
+            top_n = getattr(args, 'scan_top_n', 30) or 30
+            scan_codes = scan_market(top_n=top_n)
+            if not scan_codes:
+                logger.error("candidates 模式：扫描未产出候选股")
+                return 1
+            logger.info(f"候选股 {len(scan_codes)} 只，开始 LLM 分析...")
+            args.no_market_review = True   # 强制跳过大盘复盘
+            args._skip_scan = True         # 跳过 run_full_analysis 内的二次扫描
+            run_full_analysis(config, args, scan_codes)
+            return 0
+
+        # 模式: market — 仅大盘复盘
         if args.market_review:
             from src.analyzer import GeminiAnalyzer
             from src.core.market_review import run_market_review
