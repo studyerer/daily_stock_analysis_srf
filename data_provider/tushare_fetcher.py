@@ -987,10 +987,59 @@ class TushareFetcher(BaseFetcher):
 
     def get_sector_rankings(self, n: int = 5) -> Optional[Tuple[list, list]]:
         """
-        获取板块涨跌榜 (Tushare Pro)
+        获取板块涨跌榜 (Tushare Pro — 同花顺行业指数 ths_daily)
+
+        使用同花顺行业指数当日涨跌幅排序，返回涨幅前 N 和跌幅前 N 的行业板块。
+
+        Returns:
+            (top_n_list, bottom_n_list)  每个元素为 {'name': '电子', 'change_pct': 2.35}
+            失败返回 None
         """
-        # Tushare 获取板块数据较复杂，暂时返回 None，让 AkShare 处理
-        return None
+        if not self._api:
+            return None
+
+        try:
+            # 获取最新交易日
+            today = datetime.now().strftime("%Y%m%d")
+            self._check_rate_limit()
+            cal = self._api.trade_cal(exchange="SSE", start_date=today, end_date=today, is_open="1")
+            if cal is None or cal.empty:
+                # 今天非交易日，取最近交易日
+                start = (datetime.now() - pd.Timedelta(days=10)).strftime("%Y%m%d")
+                self._check_rate_limit()
+                cal = self._api.trade_cal(exchange="SSE", start_date=start, end_date=today, is_open="1")
+                if cal is None or cal.empty:
+                    logger.warning("[Tushare] 未获取到交易日历")
+                    return None
+            trade_date = sorted(cal["cal_date"].tolist(), reverse=True)[0]
+
+            # 拉取同花顺行业指数日线（type=N 行业，type=C 概念）
+            self._check_rate_limit()
+            df = self._api.ths_daily(trade_date=trade_date, fields="ts_code,name,pct_change")
+            if df is None or df.empty:
+                logger.warning(f"[Tushare] ths_daily {trade_date} 返回空")
+                return None
+
+            # 去重（同花顺指数可能含概念指数，按名称去重取第一条）
+            df = df.dropna(subset=["pct_change"])
+            df = df.drop_duplicates(subset=["name"], keep="first")
+            df = df.sort_values("pct_change", ascending=False)
+
+            top = [
+                {"name": row["name"], "change_pct": round(float(row["pct_change"]), 2)}
+                for _, row in df.head(n).iterrows()
+            ]
+            bottom = [
+                {"name": row["name"], "change_pct": round(float(row["pct_change"]), 2)}
+                for _, row in df.tail(n).iterrows()
+            ]
+
+            logger.info(f"[Tushare] 板块排行获取成功: {trade_date}, 共 {len(df)} 个行业")
+            return (top, bottom)
+
+        except Exception as e:
+            logger.warning(f"[Tushare] ths_daily 获取板块排行失败: {e}")
+            return None
 
 
 if __name__ == "__main__":
