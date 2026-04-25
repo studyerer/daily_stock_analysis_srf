@@ -26,7 +26,6 @@ import json
 import logging
 import os
 import time
-from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -163,55 +162,64 @@ def _calc_indicators(df_daily: pd.DataFrame) -> pd.DataFrame:
            vol_ratio_5_20, mom5, mom20, atr14, atr_ratio
     """
     df = df_daily.sort_values(["ts_code", "trade_date"]).copy()
-    g = df.groupby("ts_code", sort=False)
+
+    # 强制数值类型（防止 Tushare 偶发返回字符串）
+    for col in ["open", "high", "low", "close", "vol"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    grp = "ts_code"  # 每次 groupby 都用新实例，避免旧引用访问新列
 
     # ── 均线 ──
     for n in [5, 10, 20, 60]:
-        df[f"ma{n}"] = g["close"].transform(lambda x: x.rolling(n, min_periods=n).mean())
+        df[f"ma{n}"] = df.groupby(grp)["close"].transform(
+            lambda x, _n=n: x.rolling(_n, min_periods=_n).mean()
+        )
 
     # ── 20日新高 ──
-    df["high20"] = g["close"].transform(
+    df["high20"] = df.groupby(grp)["close"].transform(
         lambda x: x.rolling(_BREAKOUT_DAYS, min_periods=_BREAKOUT_DAYS).max()
     )
 
     # ── 回踩确认 ──
     # 昨日20日新高（shift 避免当日看到当日新高）
-    df["high20_prev"] = g["high20"].shift(1)
+    high20_prev = df.groupby(grp)["high20"].shift(1)
     # 当日是否触及新高
-    df["_is_bk"] = (df["close"] >= df["high20_prev"] * 0.99).astype(int)
+    is_bk = (df["close"] >= high20_prev * 0.99).fillna(False).astype(int)
     # 过去 PULLBACK_WINDOW 天内是否有过突破
-    df["recent_breakout"] = g["_is_bk"].transform(
+    df["recent_breakout"] = is_bk.groupby(df[grp]).transform(
         lambda x: x.rolling(_PULLBACK_WINDOW, min_periods=1).max()
     )
     # 当前不在 PULLBACK_WINDOW 日最高点 → 已回踩
-    df["_rolling_high_pw"] = g["close"].transform(
+    rolling_high_pw = df.groupby(grp)["close"].transform(
         lambda x: x.rolling(_PULLBACK_WINDOW, min_periods=1).max()
     )
-    df["not_at_high"] = (df["close"] < df["_rolling_high_pw"]).astype(int)
+    df["not_at_high"] = (df["close"] < rolling_high_pw).astype(int)
 
     # ── 量比（5日均量 / 20日均量）──
-    df["vol_ma5"] = g["vol"].transform(lambda x: x.rolling(5, min_periods=5).mean())
-    df["vol_ma20"] = g["vol"].transform(lambda x: x.rolling(20, min_periods=20).mean())
+    df["vol_ma5"] = df.groupby(grp)["vol"].transform(
+        lambda x: x.rolling(5, min_periods=5).mean()
+    )
+    df["vol_ma20"] = df.groupby(grp)["vol"].transform(
+        lambda x: x.rolling(20, min_periods=20).mean()
+    )
     df["vol_ratio_5_20"] = df["vol_ma5"] / df["vol_ma20"].replace(0, np.nan)
 
     # ── 动量 ──
-    df["mom5"] = g["close"].transform(lambda x: (x / x.shift(5) - 1) * 100)
-    df["mom20"] = g["close"].transform(lambda x: (x / x.shift(20) - 1) * 100)
+    df["mom5"] = df.groupby(grp)["close"].transform(lambda x: (x / x.shift(5) - 1) * 100)
+    df["mom20"] = df.groupby(grp)["close"].transform(lambda x: (x / x.shift(20) - 1) * 100)
 
     # ── ATR(14) ──
-    prev_close = g["close"].shift(1)
-    tr = pd.concat([
-        df["high"] - df["low"],
-        (df["high"] - prev_close).abs(),
-        (df["low"] - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    df["atr14"] = tr.groupby(df["ts_code"]).transform(
+    prev_close = df.groupby(grp)["close"].shift(1)
+    tr1 = df["high"] - df["low"]
+    tr2 = (df["high"] - prev_close).abs()
+    tr3 = (df["low"] - prev_close).abs()
+    tr = pd.DataFrame({"tr1": tr1, "tr2": tr2, "tr3": tr3}).max(axis=1)
+    df["atr14"] = tr.groupby(df[grp]).transform(
         lambda x: x.rolling(14, min_periods=14).mean()
     )
     df["atr_ratio"] = df["atr14"] / df["close"]
 
-    # 清理临时列
-    df.drop(columns=["high20_prev", "_is_bk", "_rolling_high_pw"], inplace=True, errors="ignore")
     return df
 
 
@@ -719,9 +727,8 @@ def scan_market(
     # 综合评分
     candidates["industry"] = candidates["ts_code"].map(industry_map).fillna("")
     candidates["heat"] = candidates["industry"].map(industry_heat).fillna(50.0)
-    candidates["fund_score"] = candidates["ts_code"].map(
-        lambda c: fund_scores.get(c, {}).get("fund_score", 0)
-    )
+    fund_score_map = {c: s["fund_score"] for c, s in fund_scores.items() if s.get("passed")}
+    candidates["fund_score"] = candidates["ts_code"].map(fund_score_map).fillna(0.0)
 
     # tech_with_heat = tech_score * 0.7 + heat * 0.3
     candidates["tech_with_heat"] = candidates["tech_score"] * 0.7 + candidates["heat"] * 0.3
