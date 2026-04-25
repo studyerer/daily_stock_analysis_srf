@@ -776,7 +776,7 @@ class DataFetcherManager:
         策略：
         1. 检查配置开关
         2. 检查熔断器状态
-        3. 依次尝试多个数据源：AkshareFetcher -> TushareFetcher -> EfinanceFetcher
+        3. 依次尝试多个数据源：TushareFetcher -> AkshareFetcher
         4. 所有数据源失败则返回 None（降级兜底）
 
         Args:
@@ -801,10 +801,11 @@ class DataFetcherManager:
         circuit_breaker = get_chip_circuit_breaker()
 
         # 定义筹码数据源优先级列表
+        # Tushare cyq_perf（5000积分）稳定性高于 Akshare 直连东方财富，优先使用
+        # Efinance 暂未实现 get_chip_distribution，已移除
         chip_sources = [
-            ("AkshareFetcher", "akshare_chip"),
             ("TushareFetcher", "tushare_chip"),
-            ("EfinanceFetcher", "efinance_chip"),
+            ("AkshareFetcher", "akshare_chip"),
         ]
 
         for fetcher_name, source_key in chip_sources:

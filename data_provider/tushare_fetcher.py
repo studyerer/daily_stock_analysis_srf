@@ -614,6 +614,102 @@ class TushareFetcher(BaseFetcher):
             logger.warning(f"Tushare (旧版) 获取实时行情失败 {stock_code}: {e}")
             return None
 
+    def get_chip_distribution(self, stock_code: str):
+        """
+        获取筹码分布数据
+
+        数据来源：Tushare cyq_perf 接口（每日筹码及胜率，需 5000 积分）
+        返回最新一个交易日的数据
+        """
+        from .realtime_types import ChipDistribution, safe_float
+
+        if self._api is None:
+            logger.debug("[Tushare] API 未初始化，跳过筹码分布")
+            return None
+
+        if _is_us_code(stock_code):
+            logger.debug(f"[Tushare] {stock_code} 是美股，无筹码分布数据")
+            return None
+
+        if _is_etf_code(stock_code):
+            logger.debug(f"[Tushare] {stock_code} 是 ETF/指数，无筹码分布数据")
+            return None
+
+        try:
+            self._check_rate_limit()
+            ts_code = self._convert_stock_code(stock_code)
+
+            # 拉近 30 天数据，用降序取最新交易日，避开节假日空窗
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - pd.Timedelta(days=30)).strftime('%Y%m%d')
+
+            logger.info(f"[API调用] tushare.cyq_perf(ts_code={ts_code}, {start_date}~{end_date}) 获取筹码分布...")
+            api_start = time.time()
+
+            df = self._api.cyq_perf(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            api_elapsed = time.time() - api_start
+
+            if df is None or df.empty:
+                logger.warning(f"[Tushare] cyq_perf 返回空数据 {stock_code}, 耗时 {api_elapsed:.2f}s")
+                return None
+
+            df = df.sort_values('trade_date', ascending=False)
+            latest = df.iloc[0]
+
+            logger.info(f"[Tushare] cyq_perf 成功: 返回 {len(df)} 天数据, 耗时 {api_elapsed:.2f}s")
+
+            cost_5 = safe_float(latest.get('cost_5pct'), default=0.0) or 0.0
+            cost_15 = safe_float(latest.get('cost_15pct'), default=0.0) or 0.0
+            cost_85 = safe_float(latest.get('cost_85pct'), default=0.0) or 0.0
+            cost_95 = safe_float(latest.get('cost_95pct'), default=0.0) or 0.0
+            winner_rate = safe_float(latest.get('winner_rate'), default=0.0) or 0.0
+            weight_avg = safe_float(latest.get('weight_avg'), default=0.0) or 0.0
+
+            def _conc(low: float, high: float) -> float:
+                s = high + low
+                return (high - low) / s if s > 0 else 0.0
+
+            raw_date = str(latest.get('trade_date', ''))
+            date_str = (
+                f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
+                if len(raw_date) == 8 else raw_date
+            )
+
+            chip = ChipDistribution(
+                code=stock_code,
+                date=date_str,
+                source="tushare",
+                profit_ratio=winner_rate / 100.0,
+                avg_cost=weight_avg,
+                cost_90_low=cost_5,
+                cost_90_high=cost_95,
+                concentration_90=_conc(cost_5, cost_95),
+                cost_70_low=cost_15,
+                cost_70_high=cost_85,
+                concentration_70=_conc(cost_15, cost_85),
+            )
+
+            logger.info(
+                f"[筹码分布] {stock_code} 日期={chip.date}: 获利比例={chip.profit_ratio:.1%}, "
+                f"平均成本={chip.avg_cost}, 90%集中度={chip.concentration_90:.2%}, "
+                f"70%集中度={chip.concentration_70:.2%}"
+            )
+            return chip
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            if any(k in error_msg for k in ['积分', 'permission', '权限', 'authority', '没有访问']):
+                logger.error(f"[Tushare] cyq_perf 积分不足或无权限 {stock_code}: {e}")
+            elif any(k in error_msg for k in ['quota', 'limit', '次数']):
+                logger.warning(f"[Tushare] cyq_perf 配额超限 {stock_code}: {e}")
+            else:
+                logger.error(f"[Tushare] 获取 {stock_code} 筹码分布失败: {e}")
+            return None
+
     def get_main_indices(self, region: str = "cn") -> Optional[List[dict]]:
         """
         获取主要指数实时行情 (Tushare Pro)，仅支持 A 股
