@@ -1013,16 +1013,24 @@ class TushareFetcher(BaseFetcher):
                     return None
             trade_date = sorted(cal["cal_date"].tolist(), reverse=True)[0]
 
-            # 拉取同花顺行业指数日线（type=N 行业，type=C 概念）
+            # 1) 拉取同花顺指数列表（含名称），仅行业指数 type=N
             self._check_rate_limit()
-            df = self._api.ths_daily(trade_date=trade_date, fields="ts_code,name,pct_change")
+            df_index = self._api.ths_index(exchange="A", type="N", fields="ts_code,name")
+            if df_index is None or df_index.empty:
+                logger.warning("[Tushare] ths_index 返回空")
+                return None
+            code_name = dict(zip(df_index["ts_code"], df_index["name"]))
+
+            # 2) 拉取当日行业指数日线（ths_daily 不含 name 字段）
+            self._check_rate_limit()
+            df = self._api.ths_daily(trade_date=trade_date, fields="ts_code,pct_change")
             if df is None or df.empty:
                 logger.warning(f"[Tushare] ths_daily {trade_date} 返回空")
                 return None
 
-            # 去重（同花顺指数可能含概念指数，按名称去重取第一条）
-            df = df.dropna(subset=["pct_change"])
-            df = df.drop_duplicates(subset=["name"], keep="first")
+            # 3) 合并名称，只保留行业指数（过滤掉概念指数）
+            df["name"] = df["ts_code"].map(code_name)
+            df = df.dropna(subset=["pct_change", "name"])
             df = df.sort_values("pct_change", ascending=False)
 
             top = [

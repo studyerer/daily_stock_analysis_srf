@@ -1026,8 +1026,16 @@ class DataFetcherManager:
         return {}
 
     def get_sector_rankings(self, n: int = 5) -> Tuple[List[Dict], List[Dict]]:
-        """获取板块涨跌榜（自动切换数据源）"""
-        for fetcher in self._fetchers:
+        """获取板块涨跌榜（自动切换数据源）
+
+        优先级：Tushare → AkShare → 其余 fetcher
+        """
+        preferred_names = ["TushareFetcher", "AkshareFetcher"]
+        ordered = sorted(
+            self._fetchers,
+            key=lambda f: preferred_names.index(f.name) if f.name in preferred_names else len(preferred_names),
+        )
+        for fetcher in ordered:
             try:
                 data = fetcher.get_sector_rankings(n)
                 if data:
