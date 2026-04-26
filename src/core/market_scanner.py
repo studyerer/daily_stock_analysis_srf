@@ -10,8 +10,9 @@ Market Scanner v2 — v27b 策略选股
   2. 技术面 5 条件（MA多头 + 回踩确认 + 放量 + 动量区间 + ATR波动）
   3. 基本面硬门槛（ROE/毛利率/营收增速/PE/PB/市值/负债率）
   4. 行业热度（多周期动量聚合 + 百分位排名）
-  5. 综合评分（60%技术面含行业热度 + 40%基本面）
-  6. 排序取 Top N
+  5. 概念热度（v18c：东财概念板块涨幅百分位，与行业热度各占50%）
+  6. 综合评分（60%技术面含热度 + 40%基本面）
+  7. 排序取 Top N
 
 数据需求：
   - Tushare 日线 ~80 天（~80 次 API，用于 MA60）
@@ -82,14 +83,14 @@ _TECH_INDUSTRIES = {
     "半导体", "元器件", "光学光电子", "电子制造", "其他电子",
     "计算机应用", "计算机设备", "IT服务", "软件开发",
     "通信设备", "通信服务", "通信运营",
-    "电气设备", "电源设备", "电源", "电力设备",
+    "电气设备", "电源设备", "电机", "电力设备",
     "专用设备", "通用设备", "仪器仪表",
     "航天装备", "航空装备", "地面兵装", "船舶制造",
     "医疗器械", "化学制药", "生物制品", "中药",
-    "汽车零件", "汽车整车",
+    "汽车配件", "汽车整车",
 }
 
-_LOW_ELASTIC_INDUSTRIES = {"白酒", "乳制品", "环境保护", "路桥", "仓储开发"}
+_LOW_ELASTIC_INDUSTRIES = {"白酒", "啤酒", "乳制品", "环境保护", "路桥", "园区开发"}
 
 # ── 默认参数 ──────────────────────────────────
 DEFAULT_OUTPUT_DIR = "data"
@@ -488,6 +489,125 @@ def _calc_industry_heat(
 
 
 # ============================================================
+# 东财概念板块热度（v18c）
+# ============================================================
+
+_CONCEPT_MAP_FILE = os.path.join(DEFAULT_OUTPUT_DIR, "concept_map.json")
+_CONCEPT_MAP_MAX_AGE_DAYS = 20
+
+
+def _load_or_fetch_concept_mapping(
+    api, fetcher, trade_date: str,
+) -> Dict[str, list]:
+    """
+    加载或获取东财概念板块成分映射：{stock_ts_code: [concept_codes]}。
+
+    缓存到 data/concept_map.json，20 天内有效。
+    """
+    # 检查缓存
+    if os.path.exists(_CONCEPT_MAP_FILE):
+        try:
+            with open(_CONCEPT_MAP_FILE, "r", encoding="utf-8") as fp:
+                cached = json.load(fp)
+            cached_date = cached.get("_date", "")
+            if cached_date:
+                days_since = (pd.Timestamp(trade_date) - pd.Timestamp(cached_date)).days
+                if days_since <= _CONCEPT_MAP_MAX_AGE_DAYS:
+                    mapping = {k: v for k, v in cached.items() if k != "_date"}
+                    logger.info(
+                        f"  [概念映射] 使用缓存（{cached_date}，{days_since}天前）："
+                        f"{len(mapping)} 只股票"
+                    )
+                    return mapping
+        except Exception:
+            pass
+
+    # 重新下载
+    logger.info("  [概念映射] 缓存过期或不存在，重新下载...")
+    try:
+        fetcher._check_rate_limit()
+        idx = api.dc_index(trade_date=trade_date, fields="ts_code,name")
+        if idx is None or idx.empty:
+            logger.warning("  [概念映射] dc_index 返回空")
+            return {}
+    except Exception as e:
+        logger.warning(f"  [概念映射] dc_index 失败: {e}")
+        return {}
+
+    concept_codes = idx["ts_code"].unique().tolist()
+    logger.info(f"  [概念映射] 共 {len(concept_codes)} 个概念板块，开始下载成分...")
+
+    stock_to_concepts: Dict[str, list] = {}
+    for i, ccode in enumerate(concept_codes):
+        try:
+            fetcher._check_rate_limit()
+            df = api.dc_member(
+                trade_date=trade_date, ts_code=ccode,
+                fields="ts_code,con_code",
+            )
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
+                    con = row["con_code"]
+                    if con not in stock_to_concepts:
+                        stock_to_concepts[con] = []
+                    stock_to_concepts[con].append(ccode)
+        except Exception:
+            pass
+        if (i + 1) % 50 == 0:
+            logger.info(f"    [概念映射] 进度 {i + 1}/{len(concept_codes)}")
+
+    logger.info(f"  [概念映射] 完成：{len(stock_to_concepts)} 只股票有概念归属")
+
+    # 保存缓存
+    try:
+        cache_data = dict(stock_to_concepts)
+        cache_data["_date"] = trade_date
+        os.makedirs(os.path.dirname(_CONCEPT_MAP_FILE) or ".", exist_ok=True)
+        with open(_CONCEPT_MAP_FILE, "w", encoding="utf-8") as fp:
+            json.dump(cache_data, fp, ensure_ascii=False)
+        logger.info(f"  [概念映射] 已缓存到 {_CONCEPT_MAP_FILE}")
+    except Exception as e:
+        logger.warning(f"  [概念映射] 缓存保存失败: {e}")
+
+    return stock_to_concepts
+
+
+def _calc_concept_heat(
+    api, fetcher, trade_date: str,
+    stock_concepts: Dict[str, list],
+) -> Dict[str, float]:
+    """
+    计算每只股票的概念热度百分位。
+
+    取每只股票所属概念中涨幅排名最高的百分位作为该股票的概念热度。
+    Returns {ts_code: concept_heat_percentile (0~100)}
+    """
+    if not stock_concepts:
+        return {}
+
+    try:
+        fetcher._check_rate_limit()
+        dc = api.dc_index(trade_date=trade_date, fields="ts_code,pct_change")
+        if dc is None or dc.empty:
+            return {}
+    except Exception as e:
+        logger.warning(f"  [概念热度] dc_index 行情获取失败: {e}")
+        return {}
+
+    dc["pct_change"] = pd.to_numeric(dc["pct_change"], errors="coerce")
+    dc["pct_rank"] = dc["pct_change"].rank(pct=True) * 100
+    concept_rank = dict(zip(dc["ts_code"], dc["pct_rank"]))
+
+    result: Dict[str, float] = {}
+    for stock, concepts in stock_concepts.items():
+        ranks = [concept_rank[c] for c in concepts if c in concept_rank]
+        if ranks:
+            result[stock] = max(ranks)
+
+    return result
+
+
+# ============================================================
 # 筹码胜率（可选）
 # ============================================================
 
@@ -714,7 +834,7 @@ def scan_market(
     # ================================================================
     # Step 7: 行业热度 + 综合评分
     # ================================================================
-    logger.info("[Scanner] Step 7/8: 行业热度 + 综合评分...")
+    logger.info("[Scanner] Step 7/8: 行业热度 + 概念热度 + 综合评分...")
 
     # 行业热度（全市场最新截面，不只是候选股）
     industry_heat = _calc_industry_heat(
@@ -724,9 +844,20 @@ def scan_market(
     n_ind = len(industry_heat)
     logger.info(f"  [行业热度] 有效行业 {n_ind} 个")
 
+    # 概念热度（v18c：东财概念板块）
+    stock_concepts = _load_or_fetch_concept_mapping(api, fetcher, latest_date)
+    concept_heat = _calc_concept_heat(api, fetcher, latest_date, stock_concepts)
+    logger.info(f"  [概念热度] {len(concept_heat)} 只股票有概念热度")
+
     # 综合评分
     candidates["industry"] = candidates["ts_code"].map(industry_map).fillna("")
-    candidates["heat"] = candidates["industry"].map(industry_heat).fillna(50.0)
+    ind_heat_s = candidates["industry"].map(industry_heat).fillna(50.0)
+    # v18c：融合概念热度（50%行业 + 50%概念）
+    if concept_heat:
+        cpt_heat_s = candidates["ts_code"].map(concept_heat).fillna(50.0)
+        candidates["heat"] = ind_heat_s * 0.5 + cpt_heat_s * 0.5
+    else:
+        candidates["heat"] = ind_heat_s
     fund_score_map = {c: s["fund_score"] for c, s in fund_scores.items() if s.get("passed")}
     candidates["fund_score"] = candidates["ts_code"].map(fund_score_map).fillna(0.0)
 
@@ -776,6 +907,10 @@ def scan_market(
             detail["turnover_rate"] = round(float(row["turnover_rate"]), 2)
         if "winner_rate" in row.index and pd.notna(row.get("winner_rate")):
             detail["winner_rate"] = round(float(row["winner_rate"]), 1)
+        # 概念热度（v18c）
+        cpt_h = concept_heat.get(row["ts_code"])
+        if cpt_h is not None:
+            detail["concept_heat"] = round(float(cpt_h), 1)
 
         # 构造选股理由
         parts = [
