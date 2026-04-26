@@ -36,7 +36,7 @@ class Skill:
         description: Brief description of when to apply this strategy.
         instructions: Detailed natural language instructions injected into the system prompt.
         category: Strategy category — "trend" (趋势), "pattern" (形态), "reversal" (反转), "framework" (框架).
-        core_rules: List of core trading rule numbers this strategy relates to (1-7).
+        core_rules: List of risk assessment rule numbers this strategy relates to (1-5).
         required_tools: List of tool names this strategy depends on.
         enabled: Whether this strategy is currently active.
         source: Origin of this strategy — "builtin" or file path of a custom YAML.
@@ -273,7 +273,7 @@ class SkillManager:
             for skill in skills_in_cat:
                 rules_ref = ""
                 if skill.core_rules:
-                    rules_ref = f"（关联核心理念：第{'、'.join(str(r) for r in skill.core_rules)}条）"
+                    rules_ref = f"（关联风险规则：第{'、'.join(str(r) for r in skill.core_rules)}条）"
                 parts.append(
                     f"### 策略 {idx}: {skill.display_name} {rules_ref}\n\n"
                     f"**适用场景**: {skill.description}\n\n"

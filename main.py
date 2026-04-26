@@ -15,11 +15,9 @@ A股自选股智能分析系统 - 主调度程序
     python main.py --debug      # 调试模式
     python main.py --dry-run    # 仅获取数据不分析
 
-交易理念（已融入分析）：
-- 严进策略：不追高，乖离率 > 5% 不买入
-- 趋势交易：只做 MA5>MA10>MA20 多头排列
-- 效率优先：关注筹码集中度好的股票
-- 买点偏好：缩量回踩 MA5/MA10 支撑
+架构：
+- Scanner（量化选股）：动量、趋势、基本面筛选
+- LLM Agent（风险否决）：新闻、舆情、黑天鹅、合规排查
 """
 import os
 from src.config import setup_env

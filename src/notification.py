@@ -860,6 +860,22 @@ class NotificationService:
                         "### 🎯 作战计划",
                         "",
                     ])
+                    # 风险判定
+                    risk_verdict = battle.get('risk_verdict', {})
+                    if risk_verdict:
+                        verdict = risk_verdict.get('verdict', 'N/A')
+                        risk_level = risk_verdict.get('risk_level', 'N/A')
+                        verdict_icon = "✅" if verdict == "PASS" else "❌"
+                        report_lines.extend([
+                            f"**{verdict_icon} 风险判定**: {verdict} ({risk_level})",
+                            "",
+                        ])
+                        veto_reasons = risk_verdict.get('veto_reasons', [])
+                        if veto_reasons:
+                            report_lines.append("**否决原因**:")
+                            for reason in veto_reasons:
+                                report_lines.append(f"- ❌ {reason}")
+                            report_lines.append("")
                     # 狙击点位
                     sniper = battle.get('sniper_points', {})
                     if sniper:
@@ -1016,6 +1032,20 @@ class NotificationService:
                     lines.extend(info_lines)
                     lines.append("")
                 
+                # 风险判定
+                risk_verdict = battle.get('risk_verdict', {}) if battle else {}
+                if risk_verdict:
+                    verdict = risk_verdict.get('verdict', '')
+                    risk_level = risk_verdict.get('risk_level', '')
+                    if verdict:
+                        verdict_icon = "✅" if verdict == "PASS" else "❌"
+                        lines.append(f"{verdict_icon} **风险判定**: {verdict} ({risk_level})")
+                        veto_reasons = risk_verdict.get('veto_reasons', [])
+                        if veto_reasons:
+                            for reason in veto_reasons[:2]:
+                                lines.append(f"   • {reason[:50]}")
+                        lines.append("")
+
                 # 风险警报（最重要，醒目显示）
                 risks = intel.get('risk_alerts', []) if intel else []
                 if risks:

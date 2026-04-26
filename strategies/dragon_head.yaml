@@ -1,41 +1,43 @@
 # Dragon Head Strategy / 龙头策略
-# Identifies sector leaders during sector rotation cycles.
+# Risk assessment for sector leaders during rotation cycles.
 
 name: dragon_head
 display_name: 龙头策略
-description: 板块轮动中识别龙头股。适用于板块启动或行业催化剂出现时。
+description: 板块轮动中龙头股的风险评估。适用于板块启动或行业催化剂出现时。
 category: trend
-core_rules: [2, 7]
+core_rules: [1, 3, 4]
 required_tools:
   - get_realtime_quote
   - get_sector_rankings
   - search_stock_news
 
 instructions: |
-  **龙头策略（Dragon Head Strategy）**
+  **龙头策略 — 风险评估视角（Dragon Head Risk Assessment）**
 
-  评估标准：
+  当 Scanner 筛出板块龙头股时，从以下风险维度进行审查：
 
-  1. **板块领涨地位**：
-     - 使用 `get_sector_rankings` 检查该股所在板块是否为近期涨幅前列。
-     - 确认该股是否在板块启动周期中率先上涨或涨停。
+  1. **板块持续性风险**：
+     - 使用 `get_sector_rankings` 检查板块是否仍在涨幅前列。
+     - 板块已连涨5日以上且换手率急剧放大 → 警惕板块见顶风险。
+     - 板块由事件驱动（如政策、突发消息），需评估事件持续性。
 
-  2. **换手率与动能**（关联理念7：强势趋势股放宽）：
-     - 使用 `get_realtime_quote` 检查换手率。龙头股换手率通常 > 5%。
-     - 量比 > 1.5 说明有活跃的交易兴趣。
+  2. **龙头切换风险**：
+     - 使用 `get_realtime_quote` 检查换手率。
+     - 龙头股换手率突然大幅放大（>前5日均值3倍）→ 可能是主力出货。
+     - 龙头地位是否已被同板块其他个股取代。
 
-  3. **相对强度**：
-     - 对比个股涨跌幅与板块平均值。
-     - 真正的龙头在上涨日应跑赢板块 2% 以上。
+  3. **消息面风险排查**（核心）：
+     - 使用 `search_stock_news` 搜索：
+       - 是否有监管关注（如交易所问询函、异常波动公告）
+       - 是否有大股东减持计划
+       - 行业催化剂是否已被充分预期（利好出尽）
 
-  4. **新闻催化**：
-     - 使用 `search_stock_news` 搜索板块级催化剂（政策、事件、业绩）。
-     - 龙头行情常伴随板块整体催化。
-
-  5. **乖离率检查**（关联理念1：严进策略）：
-     - 龙头股可适当放宽乖离率至 7%，但超过 10% 仍需谨慎。
+  4. **估值泡沫风险**：
+     - 龙头股在快速拉升后PE/PB是否严重偏离行业均值。
+     - 若游资主导（高换手+低机构持仓），需额外警惕。
 
   评分调整：
-  - 确认为龙头股：sentiment_score +10
-  - 板块正处于主动轮动期：额外 +5
-  - 在 `buy_reason` 中注明"龙头策略"判断结果。
+  - 板块景气度确认、无重大风险：sentiment_score +10
+  - 板块仍在主升期、有持续催化：额外 +5
+  - 发现监管关注/减持/利好出尽：sentiment_score -15
+  - 在 `risk_warning` 中注明龙头策略风险评估结果。

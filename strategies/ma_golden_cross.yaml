@@ -1,43 +1,39 @@
 # MA Golden Cross Strategy / 均线金叉
-# MA5 crosses above MA10 (or MA10 above MA20) with volume confirmation.
+# Risk assessment when Scanner detects golden cross signals.
 
 name: ma_golden_cross
 display_name: 均线金叉
-description: 检测均线金叉配合量能确认信号，经典的趋势反转/延续信号。
+description: 对 Scanner 识别的均线金叉信号进行消息面验证和风险排查。
 category: trend
-core_rules: [1, 2, 3]
+core_rules: [1, 4]
 required_tools:
-  - get_daily_history
-  - analyze_trend
+  - search_stock_news
+  - get_stock_info
 
 instructions: |
-  **均线金叉（MA Golden Cross Strategy）**
+  **均线金叉 — 消息面验证视角（Golden Cross Risk Assessment）**
 
-  信号判定标准：
+  当 Scanner 发出均线金叉买入信号时，从以下维度进行风险验证：
 
-  1. **金叉检测**（关联理念2：趋势交易）：
-     - 使用 `analyze_trend` 检查均线排列和 MACD 状态。
-     - 主信号：MA5 在最近 3 个交易日内上穿 MA10。
-     - 强信号：MA10 上穿 MA20（更慢但更可靠）。
-     - 检查 MACD 状态是否为金叉或零轴上方金叉。
+  1. **金叉背景验证**（核心）：
+     - 使用 `search_stock_news` 搜索：
+       - 金叉是否伴随利好消息（业绩、政策、新订单）→ 增加信号可信度
+       - 是否存在利空压制（减持、诉讼、监管）→ 金叉可能是假信号
+       - 是否有"利好出尽"迹象（重大利好公告后的金叉可能是出货）
 
-  2. **量能确认**（关联理念3：效率优先）：
-     - 金叉日成交量应高于 5 日均量。
-     - 使用 `get_daily_history` 验证。
-     - 金叉日量比 > 1.2 为积极信号。
+  2. **基本面支撑验证**：
+     - 使用 `get_stock_info` 检查：
+       - 业绩趋势是否支撑股价上行
+       - 估值是否合理（PE/PB不应过高）
+       - 是否有商誉减值等隐性风险
 
-  3. **趋势背景**：
-     - 盘整后金叉：最强信号。
-     - 上升趋势中金叉：延续信号。
-     - 深度下跌中金叉：弱信号，需更多确认。
-
-  4. **价格位置**（关联理念1：严进策略）：
-     - 价格应在交叉均线附近或上方。
-     - 乖离率 < 5% — 避免追高延迟入场。
+  3. **假信号风险识别**：
+     - 在长期下跌趋势中的金叉 → 弱信号，需更多确认
+     - 盘整后金叉 + 无利空 → 较强信号
+     - 连续多次金叉死叉 → 震荡市假信号多，降低信心
 
   评分调整：
-  - MA5 × MA10 金叉配合量能：sentiment_score +10
-  - MA10 × MA20 金叉：sentiment_score +8
-  - MACD 零轴上方金叉：额外 +5
-  - 在 `ma_analysis` 和 `buy_reason` 中注明"均线金叉"。
-  - 理想买点设在交叉均线水平附近。
+  - 金叉 + 利好消息配合 + 基本面正常：sentiment_score +10
+  - 金叉 + MACD 零轴上方：额外 +5
+  - 发现利空/假信号风险：sentiment_score -10
+  - 在 `news_summary` 中注明金叉消息面验证结果。

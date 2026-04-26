@@ -1,44 +1,44 @@
 # Volume Breakout Strategy / 放量突破
-# Price breaks above resistance on heavy volume (>2x average).
+# Risk assessment for breakout signals — verify no hidden risks.
 
 name: volume_breakout
 display_name: 放量突破
-description: 检测放量突破阻力位信号。适用于股价接近已知阻力位时。
+description: 对 Scanner 识别的放量突破信号进行风险排查，确认突破时无利空压制。
 category: trend
-core_rules: [1, 2, 3]
+core_rules: [1, 3, 4]
 required_tools:
-  - get_daily_history
-  - analyze_trend
-  - get_realtime_quote
+  - search_stock_news
+  - get_stock_info
+  - get_sector_rankings
 
 instructions: |
-  **放量突破（Volume Breakout Strategy）**
+  **放量突破 — 风险排查视角（Breakout Risk Assessment）**
 
-  突破判定标准：
+  当 Scanner 发出放量突破信号时，从以下维度排查风险：
 
-  1. **阻力位识别**：
-     - 使用 `analyze_trend` → resistance_levels 获取阻力位。
-     - 通常为 20 日高点或前期震荡平台顶部。
+  1. **突破时消息面排查**（核心）：
+     - 使用 `search_stock_news` 搜索：
+       - 突破是否有消息催化（利好驱动的突破更可靠）
+       - 是否存在"利好出尽"风险（如重大合同公告后突破可能是出货）
+       - 是否有隐藏利空（减持、诉讼即将公告）
 
-  2. **量能确认**（关联理念3：效率优先）：
-     - 当日成交量 > 5 日均量的 2 倍。
-     - 使用 `get_realtime_quote` → volume_ratio > 2.0 确认。
-     - 使用 `get_daily_history` 计算均量进行交叉验证。
+  2. **估值合理性检查**：
+     - 使用 `get_stock_info` 检查：
+       - 突破后估值是否进入泡沫区域（PE远超行业2倍）
+       - 基本面是否支撑更高估值
+       - 避免追入"泡沫型突破"
 
-  3. **价格确认**（关联理念1：严进策略）：
-     - 收盘价必须站上阻力位。
-     - 收盘应在当日振幅上方 30%（强势收盘）。
-     - 突破后乖离率检查：仍需 < 5%，避免追高。
+  3. **板块共振确认**：
+     - 使用 `get_sector_rankings` 检查：
+       - 个股突破是否有板块整体走强配合（板块共振更可靠）
+       - 板块若已见顶 → 个股突破可能是假突破
 
-  4. **后续验证**（如有数据）：
-     - 次日开盘应在突破位之上，区分真突破与假突破。
-
-  5. **风险过滤**（关联理念5：风险排查）：
-     - 通过 `search_stock_news` 检查无重大利空。
-     - PE 不应过高（避免泡沫型突破）。
+  4. **假突破风险识别**：
+     - 突破时是否有异常大单对倒嫌疑
+     - 近期是否有多次假突破历史
 
   评分调整：
-  - 放量突破确认：sentiment_score +12
-  - 突破伴随板块共振（板块也走强）：额外 +5
-  - 理想买点设在突破位附近，止损设在突破位下方 3%。
-  - 在 `buy_reason` 和 `volume_analysis` 中注明"放量突破"。
+  - 突破 + 利好催化 + 板块共振 + 估值合理：sentiment_score +12
+  - 板块也在走强：额外 +5
+  - 发现利空/估值过高/板块见顶：sentiment_score -12
+  - 在 `risk_warning` 中注明突破风险排查结果。

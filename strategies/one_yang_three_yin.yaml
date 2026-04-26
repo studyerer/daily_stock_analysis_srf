@@ -1,35 +1,41 @@
 # One Yang Three Yin Strategy / 一阳夹三阴
-# K-line pattern: bullish → 3 small bearish → bullish. Consolidation end signal.
+# Risk assessment for this K-line pattern — verify fundamentals support reversal.
 
 name: one_yang_three_yin
 display_name: 一阳夹三阴
-description: 检测一阳夹三阴K线整理形态，趋势延续入场信号。
+description: 对一阳夹三阴形态信号进行基本面验证和风险排查。
 category: pattern
-core_rules: [2, 4]
+core_rules: [1, 4]
 required_tools:
-  - get_daily_history
-  - analyze_trend
+  - search_stock_news
+  - get_stock_info
 
 instructions: |
-  **一阳夹三阴（One Yang Three Yin Strategy）**
+  **一阳夹三阴 — 风险排查视角（Pattern Risk Assessment）**
 
-  形态定义（最近 5 个交易日）：
+  当 Scanner 识别到一阳夹三阴形态时，验证反转信号的可信度：
 
-  1. **第1日**：大阳线（收盘价 > 开盘价，实体 > 股价的 2%）。
-  2. **第2-4日**：连续三根阴线或小K线：
-     - 每根K线最低价不跌破第1日开盘价。
-     - 成交量应逐步萎缩（量比 < 0.8）。
-     - 三根K线应收在第1日实体范围内。
-  3. **第5日**：又一根阳线，收盘价突破第1日收盘价。
+  1. **整理期间消息面排查**（核心）：
+     - 使用 `search_stock_news` 搜索：
+       - 三阴整理期间是否有利空消息（减持、业绩预警、监管）
+       - 第五日阳线是否伴随利好催化
+       - 是否存在"利空未出尽"的风险
+     - 若整理由利空驱动 → 形态可能是下跌中继，应否决
+     - 若整理为正常技术洗盘 → 形态可信度高
 
-  如何使用工具评估：
+  2. **基本面支撑验证**：
+     - 使用 `get_stock_info` 检查：
+       - 业绩趋势是否正常（支撑趋势延续判断）
+       - 估值是否合理
+       - 是否有即将发布的重要公告（可能打破形态）
 
-  1. 使用 `get_daily_history` 获取最近 10 日数据。
-  2. 检查最后 5 根K线是否符合上述形态。
-  3. 使用 `analyze_trend` 确认多头排列（关联理念2：趋势交易，MA5 > MA10 > MA20）。
+  3. **形态可信度评估**：
+     - 上升趋势中的一阳夹三阴 + 无利空 → 高可信度
+     - 震荡区域的形态 + 消息面不明 → 中等可信度
+     - 下跌趋势中出现 + 有利空 → 低可信度
 
   评分调整：
-  - 形态成立 + 趋势看多：sentiment_score +15
-  - 形态成立但趋势不明：sentiment_score +5
-  - 在 `pattern_analysis` 和 `buy_reason` 中注明"一阳夹三阴"。
-  - 理想买点设在第5日收盘价附近，止损设在第1日开盘价下方。
+  - 形态 + 无利空 + 基本面正常：sentiment_score +12
+  - 形态 + 利好催化配合：额外 +5
+  - 发现利空驱动/基本面恶化：sentiment_score -10
+  - 在 `pattern_analysis` 和 `risk_warning` 中注明验证结果。

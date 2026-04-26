@@ -1,46 +1,44 @@
 # Bottom Volume Surge Strategy / 底部放量
-# After extended decline, price stabilizes and volume spikes. Potential reversal.
+# Risk assessment for potential reversal signals after extended decline.
 
 name: bottom_volume
 display_name: 底部放量
-description: 检测长期下跌后底部放量信号，潜在趋势反转信号。
+description: 对底部放量反转信号进行风险排查，确认是否有持续利空压制。
 category: reversal
-core_rules: [2, 5]
+core_rules: [1, 4]
 required_tools:
-  - get_daily_history
-  - analyze_trend
+  - search_stock_news
+  - get_stock_info
 
 instructions: |
-  **底部放量（Bottom Volume Surge Strategy）**
+  **底部放量 — 风险排查视角（Bottom Reversal Risk Assessment）**
 
-  反转判定标准：
+  底部反转是高风险信号，风险排查尤为重要：
 
-  1. **持续下跌确认**：
-     - 使用 `get_daily_history`（30日）。
-     - 股价从 20 日高点到近期低点跌幅 > 15%。
-     - `analyze_trend` → trend_status 应为 BEAR 或 STRONG_BEAR。
+  1. **下跌原因排查**（核心）：
+     - 使用 `search_stock_news` 搜索：
+       - 前期下跌是否由持续利空驱动（如行业政策打压、业绩持续恶化）
+       - 利空因素是否已消除或充分消化
+       - 是否有新的利好催化（政策转向、业绩拐点）
+     - 若利空因素仍在持续 → 底部放量可能只是"下跌中继"，应否决。
 
-  2. **量能异动**：
-     - 当日成交量 > 5 日均量的 3 倍。
-     - 使用 `get_realtime_quote` → volume_ratio > 3.0。
-     - 该异动应出现在前期极度缩量之后。
+  2. **基本面底部确认**：
+     - 使用 `get_stock_info` 检查：
+       - 业绩是否已触底（最新季度是否环比改善）
+       - 是否存在退市风险（连续亏损、审计意见）
+       - 现金流是否健康（避免流动性危机）
 
-  3. **价格企稳**：
-     - 当日K线收阳（收盘价 > 开盘价）。
-     - 价格守住近期低点。
-     - 最好出现长下影线，显示买方支撑。
+  3. **主力行为判断**：
+     - 底部放量是主力建仓还是最后的恐慌抛售？
+     - 若放量伴随阳线且守住低点 → 倾向建仓
+     - 若放量但持续创新低 → 倾向恐慌出逃
 
-  4. **确认因素**（关联理念5：风险排查）：
-     - 通过 `search_stock_news` 确认是否有基本面催化。
-     - 筹码分布：平均成本接近现价（成本收敛）。
-
-  5. **风险提示**（关联理念2：趋势交易）：
-     - 这是反转信号，风险高于趋势跟踪。
-     - 仓位建议较小（最多 2-3 成）。
-     - 止损必须严格（设在近期低点下方）。
+  4. **风险提示**：
+     - 反转信号风险高于趋势跟踪，建议小仓位。
+     - 止损必须严格。
 
   评分调整：
-  - 底部放量确认：sentiment_score +8
-  - 配合阳线 + 新闻催化：额外 +5
-  - 在 `buy_reason` 和 `pattern_analysis` 中注明"底部放量"。
-  - 止损设在近期低点。
+  - 利空消除 + 基本面触底 + 放量阳线：sentiment_score +8
+  - 有新催化（政策/业绩拐点）：额外 +5
+  - 利空持续 / 退市风险：sentiment_score -20，建议否决
+  - 在 `risk_warning` 中注明底部放量风险评估结果。

@@ -1,42 +1,45 @@
 # Shrink Volume Pullback Strategy / 缩量回踩
-# Volume shrinks during pullback to MA5/MA10, then price bounces.
+# Risk assessment for pullback entries identified by Scanner.
 
 name: shrink_pullback
 display_name: 缩量回踩
-description: 检测缩量回踩均线支撑信号，趋势延续的理想入场点。
+description: 对 Scanner 识别的缩量回踩信号进行风险排查，确认回调期间无利空。
 category: trend
-core_rules: [1, 2, 4]
+core_rules: [1, 4]
 required_tools:
-  - get_daily_history
-  - analyze_trend
-  - get_realtime_quote
+  - search_stock_news
+  - get_stock_info
+  - get_sector_rankings
 
 instructions: |
-  **缩量回踩（Shrink Volume Pullback Strategy）**
+  **缩量回踩 — 风险排查视角（Pullback Risk Assessment）**
 
-  入场判定标准：
+  当 Scanner 发出缩量回踩买入信号时，从以下维度排查风险：
 
-  1. **前提条件**（关联理念2：趋势交易）：
-     - 股票必须处于上升趋势（MA5 > MA10 > MA20）。
-     - 使用 `analyze_trend` 确认多头排列。
+  1. **回调原因排查**（核心）：
+     - 使用 `search_stock_news` 搜索回调期间是否有利空消息驱动：
+       - 减持公告、业绩预警、诉讼、监管问题
+       - 行业政策变化（集采、限价、反垄断）
+     - 若回调由利空驱动 → 这不是"洗盘"而是"出逃"，应否决。
+     - 若回调期间无明显利空 → 支持"正常技术回调"判断。
 
-  2. **回踩检测**（关联理念4：买点偏好）：
-     - 使用 `get_daily_history` 和 `get_realtime_quote`。
-     - 价格回踩至 MA5 附近（误差 1% 以内）或 MA10 附近（误差 2% 以内）。
-     - 回调期间成交量 < 5 日均量的 70%（缩量特征）。
-     - `analyze_trend` → volume_status 应显示缩量。
+  2. **基本面验证**：
+     - 使用 `get_stock_info` 检查：
+       - 近期业绩预告是否正常
+       - ROE/营收增速是否仍在合理区间
+       - 是否有商誉减值风险
 
-  3. **反弹信号**（关联理念1：严进策略）：
-     - 当前价格守住均线支撑位。
-     - MA5 乖离率 < 2% — 最佳买入区间。
+  3. **行业环境确认**：
+     - 使用 `get_sector_rankings` 确认：
+       - 个股回调是否为板块整体调整（系统性vs个股性）
+       - 板块整体景气度是否仍然向好
 
-  4. **确认条件**（关联理念5：风险排查）：
-     - `search_stock_news` 无利空消息。
-     - 筹码分布健康（获利比例 50-80%）。
+  4. **减持与解禁排查**：
+     - 近期是否有大额解禁
+     - 股东/高管是否有减持计划
 
   评分调整：
-  - 缩量回踩 MA5：sentiment_score +10
-  - 缩量回踩 MA10 且量能 < 0.6 倍均量：sentiment_score +8
-  - 理想买点设在 MA5 水平，次优买点设在 MA10。
-  - 止损设在 MA20 水平。
-  - 在 `buy_reason` 中注明"缩量回踩"。
+  - 回调期间无利空、基本面正常：sentiment_score +8
+  - 板块整体仍强、个股跟随调整：额外 +5
+  - 发现利空驱动回调：sentiment_score -15，建议否决
+  - 在 `risk_warning` 中注明回调原因排查结果。

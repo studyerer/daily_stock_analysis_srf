@@ -1,44 +1,51 @@
 # Default Bull Trend Strategy / 默认多头趋势
+# Risk assessment for bullish trend stocks.
 
 name: bull_trend
 display_name: 默认多头趋势
-description: 默认个股分析优先策略，识别多头排列、趋势延续与回踩低吸机会。
+description: 默认个股分析策略，对趋势向上的股票进行风险评估与情报补充。
 category: trend
 core_rules: [1, 2, 3]
 required_tools:
-  - get_daily_history
-  - analyze_trend
+  - search_stock_news
+  - get_stock_info
+  - get_sector_rankings
 
 instructions: |
-  **默认多头趋势（Default Bull Trend Strategy）**
+  **默认多头趋势 — 风险评估视角（Bull Trend Risk Assessment）**
 
   适用场景：
   - 常规个股分析的默认策略。
-  - 优先寻找“趋势向上 + 风险可控 + 不追高”的机会。
+  - 对 Scanner 筛出的趋势向上股票进行风险审查。
 
-  分析框架：
+  风险评估框架：
 
-  1. **趋势确认（优先级最高）**
-     - 使用 `analyze_trend` 判断 MA5/MA10/MA20 排列。
-     - MA5 >= MA10 >= MA20 且 MA20 斜率向上，视为多头结构。
-     - 若价格显著跌破 MA20，则降低看多权重。
+  1. **重大风险一票否决排查**（优先级最高）
+     - 使用 `search_stock_news` 排查：
+       - 减持公告、业绩预亏、监管处罚、立案调查
+       - 行业重大政策利空
+       - 大额解禁且有减持计划
+     - 任一项成立 → 直接否决。
 
-  2. **位置与节奏**
-     - 优先“回踩不破”而非“高位追涨”。
-     - 当价格距离 MA5/MA10 过远时，提示等待回踩。
-     - 放量突破有效阻力时可提高胜率评级。
+  2. **基本面健康度**
+     - 使用 `get_stock_info` 评估：
+       - ROE趋势（是否持续下降）
+       - 营收增速、毛利率趋势
+       - 商誉占比、大股东质押比例
+     - 基本面恶化 → 降低评分。
 
-  3. **量价验证**
-     - 使用 `get_daily_history` 检查突破日/反弹日是否放量。
-     - 缩量上涨需谨慎，放量滞涨需警惕分歧。
+  3. **行业景气度**
+     - 使用 `get_sector_rankings` 判断：
+       - 板块是否处于主升期（提升信心）
+       - 板块是否持续走弱（降低信心）
+       - 行业政策风向
 
-  4. **交易建议输出**
-     - 输出明确的“买入/观望/减仓”倾向及触发条件。
-     - 必须给出止损参考（如 MA20 下方或结构低点）。
-     - 若无清晰优势，明确写“暂不出手”，避免过度交易。
+  4. **利好催化识别**
+     - 业绩超预期、新产品/订单、政策扶持
+     - 机构调研密集/评级上调
 
   评分调整建议：
-  - 多头排列 + 趋势强度良好：`sentiment_score +12`
-  - 回踩关键均线后企稳：`sentiment_score +8`
-  - 放量突破关键阻力：`sentiment_score +10`
-  - 跌破 MA20 或趋势转弱：`sentiment_score -12`
+  - 无风险 + 基本面健康 + 行业景气：sentiment_score +12
+  - 有利好催化：额外 sentiment_score +8
+  - 存在风险预警项：sentiment_score -10
+  - 存在否决项：直接建议"观望"
