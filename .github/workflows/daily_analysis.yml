@@ -173,7 +173,7 @@ jobs:
           
         run: |
           # 判断运行模式
-          MODE="${{ github.event.inputs.mode || 'full' }}"
+          MODE="${{ github.event.inputs.mode || 'whitelist' }}"
           
           echo "=========================================="
           echo "🚀 A股自选股智能分析系统"
